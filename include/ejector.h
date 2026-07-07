@@ -6,16 +6,16 @@ extern uint16_t hr_get(uint16_t idx);
 extern void ir_set(uint16_t idx, uint16_t val);
 
 /**
- * Machine d'état éjecteur (non-bloquante)
- * 
- *  IDLE ──(belly=1 & enable)──► WAIT_DELAY ──(delay écoulé)──► FIRING ──(durée écoulée)──► IDLE
+ * Ejector state machine (non-blocking)
+ *
+ *  IDLE ──(belly=1 & enable)──► WAIT_DELAY ──(delay elapsed)──► FIRING ──(duration elapsed)──► IDLE
  *                                                                  │
- *                                                              active DO_EJECTOR
- * 
- * Paramètres configurables via Modbus HR:
- *   hr_get(HR_EJECTOR_DELAY)    : délai avant éjection (ms)
- *   hr_get(HR_EJECTOR_DURATION) : durée impulsion (ms)
- *   hr_get(HR_EJECTOR_ENABLE)   : 0=bloqué, 1=actif
+ *                                                              activates DO_EJECTOR
+ *
+ * Parameters configurable via Modbus HR:
+ *   hr_get(HR_EJECTOR_DELAY)    : delay before ejection (ms)
+ *   hr_get(HR_EJECTOR_DURATION) : pulse duration (ms)
+ *   hr_get(HR_EJECTOR_ENABLE)   : 0=blocked, 1=active
  */
 
 enum EjectorState : uint8_t {
@@ -27,8 +27,8 @@ enum EjectorState : uint8_t {
 struct EjectorCtrl {
   EjectorState state;
   unsigned long timer_start;
-  uint16_t      count;        // nb d'éjections (exposé Modbus)
-  bool          last_belly;   // pour détection front montant
+  uint16_t      count;        // number of ejections (exposed via Modbus)
+  bool          last_belly;   // for rising-edge detection
 };
 
 static EjectorCtrl _ej = {};
@@ -50,27 +50,27 @@ void ejector_update(unsigned long now) {
   switch (_ej.state) {
 
     case EJ_IDLE:
-      // Front montant sur belly fiber
+      // Rising edge on belly fiber
       if (enable && belly && !_ej.last_belly) {
         uint16_t delay_ms = hr_get(HR_EJECTOR_DELAY);
         if (delay_ms == 0) {
-          // Pas de délai → on tire directement
+          // No delay → fire immediately
           io_set_output(DO_EJECTOR, true);
           _ej.timer_start = now;
           _ej.state       = EJ_FIRING;
           _ej.count++;
-          Serial.printf("[EJECTOR] Tir #%u (sans délai)\n", _ej.count);
+          Serial.printf("[EJECTOR] Fire #%u (no delay)\n", _ej.count);
         } else {
           _ej.timer_start = now;
           _ej.state       = EJ_WAIT_DELAY;
-          Serial.printf("[EJECTOR] Détection - attente %u ms\n", delay_ms);
+          Serial.printf("[EJECTOR] Detected - waiting %u ms\n", delay_ms);
         }
       }
       break;
 
     case EJ_WAIT_DELAY:
       if (!enable) {
-        // Éjecteur désactivé pendant attente : annuler
+        // Ejector disabled while waiting: cancel
         _ej.state = EJ_IDLE;
         break;
       }
@@ -79,7 +79,7 @@ void ejector_update(unsigned long now) {
         _ej.timer_start = now;
         _ej.state       = EJ_FIRING;
         _ej.count++;
-        Serial.printf("[EJECTOR] Tir #%u\n", _ej.count);
+        Serial.printf("[EJECTOR] Fire #%u\n", _ej.count);
       }
       break;
 
@@ -90,7 +90,7 @@ void ejector_update(unsigned long now) {
         if (now - _ej.timer_start >= dur) {
           io_set_output(DO_EJECTOR, false);
           _ej.state = EJ_IDLE;
-          Serial.println(F("[EJECTOR] Fin tir"));
+          Serial.println(F("[EJECTOR] Fire end"));
         }
       }
       break;
@@ -98,7 +98,7 @@ void ejector_update(unsigned long now) {
 
   _ej.last_belly = belly;
 
-  // Mise à jour registres Modbus
+  // Update Modbus registers
   ir_set(IR_EJECTOR_COUNT, _ej.count);
   ir_set(IR_EJECTOR_STATE, (uint16_t)_ej.state);
 }

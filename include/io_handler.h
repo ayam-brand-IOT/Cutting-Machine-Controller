@@ -6,22 +6,22 @@
 /**
  * IO Handler
  *
- * DIN : GPIO directs avec optocoupleurs — utilisés directement par nom applicatif
- *        ex. digitalRead(DIN_BELLY_FIBER)  →  lit GPIO4
+ * DIN : direct GPIOs with optocouplers — used directly by application name
+ *        e.g. digitalRead(DIN_BELLY_FIBER)  →  reads GPIO4
  *
  * DO  : TCA9554 via I2C (GPIO41 SCL, GPIO42 SDA)
- *        Extend IO1–8 = CH1–8 relais
+ *        Extend IO1–8 = CH1–8 relays
  */
 
-// ─── Registres TCA9554 ────────────────────────────────────────────────────────
+// ─── TCA9554 registers ────────────────────────────────────────────────────────
 #define TCA9554_REG_OUTPUT   0x01
 #define TCA9554_REG_CONFIG   0x03   // 1=input, 0=output
 
-// ─── État global IO ───────────────────────────────────────────────────────────
+// ─── Global IO state ───────────────────────────────────────────────────────────
 struct IOState {
-  uint8_t do_state;      // état courant sorties TCA9554
+  uint8_t do_state;      // current TCA9554 output state
 
-  // Signaux DIN décodés (mis à jour par io_read_inputs)
+  // Decoded DIN signals (updated by io_read_inputs)
   bool belly_fiber;
   bool fb_blade_pulse;
   bool fb_wheel1_pulse;
@@ -43,16 +43,16 @@ static bool _tca_write(uint8_t addr, uint8_t reg, uint8_t val) {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 void io_init() {
-  // I2C pour TCA9554 DO
+  // I2C for TCA9554 DO
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(100000);
 
-  // TCA9554 : tous en sortie, tous éteints (logique inversée : 0xFF = OFF)
+  // TCA9554: all outputs, all off (inverted logic: 0xFF = OFF)
   _tca_write(TCA9554_ADDR_DO, TCA9554_REG_OUTPUT, 0xFF);
   _tca_write(TCA9554_ADDR_DO, TCA9554_REG_CONFIG, 0x00);
-  g_io.do_state = 0x00;   // do_state reste en logique positive (1=ON)
+  g_io.do_state = 0x00;   // do_state stays in positive logic (1=ON)
 
-  // DIN : INPUT (optos forcent le niveau, pas de pull nécessaire)
+  // DIN: INPUT (optocouplers drive the level, no pull needed)
   pinMode(DIN_BELLY_FIBER,  INPUT);
   pinMode(DIN_FB_BLADE,     INPUT);
   pinMode(DIN_FB_WHEEL1,    INPUT);
@@ -65,7 +65,7 @@ void io_init() {
   Serial.println(F("[IO] Init OK"));
 }
 
-// ─── Lecture DIN ──────────────────────────────────────────────────────────────
+// ─── Read DIN ──────────────────────────────────────────────────────────────
 void io_read_inputs() {
   g_io.belly_fiber      = digitalRead(DIN_BELLY_FIBER);
   g_io.fb_blade_pulse   = digitalRead(DIN_FB_BLADE);
@@ -76,14 +76,14 @@ void io_read_inputs() {
   g_io.fb_belt          = digitalRead(DIN_FB_BELT);
 }
 
-// ─── Sorties DO via TCA9554 ───────────────────────────────────────────────────
+// ─── DO outputs via TCA9554 ───────────────────────────────────────────────────
 void io_set_output(uint8_t bit, bool state) {
   if (bit > 7) return;
   if (state)
     g_io.do_state |=  (1 << bit);
   else
     g_io.do_state &= ~(1 << bit);
-  _tca_write(TCA9554_ADDR_DO, TCA9554_REG_OUTPUT, ~g_io.do_state);  // logique inversée : 0=ON, 1=OFF
+  _tca_write(TCA9554_ADDR_DO, TCA9554_REG_OUTPUT, ~g_io.do_state);  // inverted logic: 0=ON, 1=OFF
 }
 
 bool io_get_output(uint8_t bit) {

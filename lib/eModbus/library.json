@@ -1,0 +1,12 @@
+{
+  "name": "eModbus",
+  "version": "1.7.4",
+  "description": "RTU-only vendored subset of miq19/eModbus, pinned for this project. Modbus RTU server over RS485 only; TCP/Ethernet/WiFi/async and client roles removed. Declares no external dependencies on purpose.",
+  "keywords": "modbus, rtu, rs485, esp32",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "license": "MIT",
+  "build": {
+    "srcFilter": "+<*>"
+  }
+}

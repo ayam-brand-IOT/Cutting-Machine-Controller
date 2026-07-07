@@ -1,0 +1,26 @@
+{
+  "name": "waveshare-8DI-8DO",
+  "version": "1.0.0",
+  "description": "Non-blocking industrial driver for the Waveshare ESP32-S3-POE-ETH-8DI-8DO: safe-boot outputs, opto-isolated 24V inputs with debounce/edge/pulse/RPM, I2C-expander outputs with a mutex-guarded shadow register, non-blocking ejector and CIP state machines, and a Modbus RTU slave over isolated RS485.",
+  "keywords": "waveshare, esp32-s3, industrial, modbus, rs485, digital-io, ethernet, w5500, can, safe-boot",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/waveshare-8DI-8DO.git"
+  },
+  "authors": [
+    {
+      "name": "Emmanuel Lastra",
+      "maintainer": true
+    }
+  ],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "headers": "Waveshare8DI8DO.h",
+  "dependencies": {
+    "miq19/eModbus": "^1.7.4"
+  },
+  "build": {
+    "srcFilter": "+<*>"
+  }
+}

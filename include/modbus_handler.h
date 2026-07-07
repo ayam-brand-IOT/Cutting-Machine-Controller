@@ -6,29 +6,29 @@
 
 /**
  * Modbus RTU Slave via eModbus (miq19/eModbus)
- * 
- * eModbus tourne dans une tâche FreeRTOS séparée → non-bloquant
- * Gestion DE pin intégrée dans le constructeur ModbusServerRTU
- * 
- * API : callback par FC (function code)
- *   FC03 = READ_HOLD_REGISTER   → Holding registers (paramètres)
- *   FC04 = READ_INPUT_REGISTER  → Input registers   (mesures)
- *   FC06 = WRITE_HOLD_REGISTER  → Écriture 1 registre
- *   FC16 = WRITE_MULT_REGISTERS → Écriture multiple
+ *
+ * eModbus runs in a separate FreeRTOS task → non-blocking
+ * DE pin handling built into the ModbusServerRTU constructor
+ *
+ * API: callback per FC (function code)
+ *   FC03 = READ_HOLD_REGISTER   → Holding registers (parameters)
+ *   FC04 = READ_INPUT_REGISTER  → Input registers   (measurements)
+ *   FC06 = WRITE_HOLD_REGISTER  → Write 1 register
+ *   FC16 = WRITE_MULT_REGISTERS → Write multiple registers
  */
 
-// ─── Tableaux registres ───────────────────────────────────────────────────────
+// ─── Register arrays ───────────────────────────────────────────────────────────
 uint16_t g_hr[HR_COUNT];   // Holding registers (R/W)
 uint16_t g_ir[IR_COUNT];   // Input registers   (R only)
 
-// ─── Mutex pour accès concurrent loop() ↔ tâche Modbus ───────────────────────
+// ─── Mutex for concurrent access loop() ↔ Modbus task ───────────────────────
 static portMUX_TYPE _reg_mux = portMUX_INITIALIZER_UNLOCKED;
 
-// ─── Serveur RTU eModbus ──────────────────────────────────────────────────────
-// Constructeur : (DE_pin) — gère RE/DE automatiquement
+// ─── eModbus RTU server ──────────────────────────────────────────────────────
+// Constructor: (DE_pin) — handles RE/DE automatically
 static ModbusServerRTU _mbServer(RS485_DE_PIN);
 
-// ─── Helpers lecture/écriture registres thread-safe ──────────────────────────
+// ─── Thread-safe register read/write helpers ──────────────────────────
 static uint16_t _hr_get(uint16_t idx) {
   if (idx >= HR_COUNT) return 0;
   portENTER_CRITICAL(&_reg_mux);
@@ -52,8 +52,8 @@ static uint16_t _ir_get(uint16_t idx) {
   return v;
 }
 
-// Utilisé par ejector.h / cip.h / rpm_counter.h (depuis loop(), pas de mutex nécessaire
-// car ces fonctions ne sont appelées QUE depuis la loop. Les callbacks Modbus sont en tâche séparée.)
+// Used by ejector.h / cip.h / rpm_counter.h (from loop(), no mutex needed
+// because these functions are ONLY called from the loop. Modbus callbacks run in a separate task.)
 void ir_set(uint16_t idx, uint16_t val) {
   if (idx >= IR_COUNT) return;
   portENTER_CRITICAL(&_reg_mux);
@@ -61,7 +61,7 @@ void ir_set(uint16_t idx, uint16_t val) {
   portEXIT_CRITICAL(&_reg_mux);
 }
 
-// ─── Validation holding registers ────────────────────────────────────────────
+// ─── Holding register validation ────────────────────────────────────────────
 static void _clamp_hr(uint16_t idx) {
   uint16_t v = g_hr[idx];
   switch (idx) {
@@ -93,7 +93,7 @@ static void _clamp_hr(uint16_t idx) {
   }
 }
 
-// ─── Callbacks FC03 : Read Holding Registers ─────────────────────────────────
+// ─── FC03 callback: Read Holding Registers ─────────────────────────────────
 ModbusMessage FC03_handler(ModbusMessage request) {
   ModbusMessage response;
   uint16_t addr, count;
@@ -112,7 +112,7 @@ ModbusMessage FC03_handler(ModbusMessage request) {
   return response;
 }
 
-// ─── Callback FC04 : Read Input Registers ────────────────────────────────────
+// ─── FC04 callback: Read Input Registers ────────────────────────────────────
 ModbusMessage FC04_handler(ModbusMessage request) {
   ModbusMessage response;
   uint16_t addr, count;
@@ -131,7 +131,7 @@ ModbusMessage FC04_handler(ModbusMessage request) {
   return response;
 }
 
-// ─── Callback FC06 : Write Single Holding Register ───────────────────────────
+// ─── FC06 callback: Write Single Holding Register ───────────────────────────
 ModbusMessage FC06_handler(ModbusMessage request) {
   ModbusMessage response;
   uint16_t addr, value;
@@ -148,11 +148,11 @@ ModbusMessage FC06_handler(ModbusMessage request) {
   _clamp_hr(addr);
   portEXIT_CRITICAL(&_reg_mux);
 
-  // Echo réponse standard FC06
+  // Standard FC06 echo response
   return ECHO_RESPONSE;
 }
 
-// ─── Callback FC16 : Write Multiple Holding Registers ────────────────────────
+// ─── FC16 callback: Write Multiple Holding Registers ────────────────────────
 ModbusMessage FC16_handler(ModbusMessage request) {
   ModbusMessage response;
   uint16_t addr, count;
@@ -175,12 +175,12 @@ ModbusMessage FC16_handler(ModbusMessage request) {
   }
   portEXIT_CRITICAL(&_reg_mux);
 
-  // Réponse standard FC16 : serverID + FC + start_addr + count
+  // Standard FC16 response: serverID + FC + start_addr + count
   response.add(request.getServerID(), request.getFunctionCode(), addr, count);
   return response;
 }
 
-// ─── Init valeurs par défaut ──────────────────────────────────────────────────
+// ─── Init default values ──────────────────────────────────────────────────
 static void _set_defaults() {
   memset(g_hr, 0, sizeof(g_hr));
   memset(g_ir, 0, sizeof(g_ir));
@@ -202,25 +202,25 @@ static void _set_defaults() {
 void modbus_init() {
   _set_defaults();
 
-  // Préparer le buffer UART (260 bytes) AVANT Serial1.begin()
+  // Prepare the UART buffer (260 bytes) BEFORE Serial1.begin()
   RTUutils::prepareHardwareSerial(Serial1);
   Serial1.begin(MODBUS_BAUD, MODBUS_CONFIG, RS485_RX_PIN, RS485_TX_PIN);
 
-  // Enregistrer les callbacks par FC
+  // Register callbacks per FC
   _mbServer.registerWorker(MODBUS_NODE_ID, READ_HOLD_REGISTER,  &FC03_handler);
   _mbServer.registerWorker(MODBUS_NODE_ID, READ_INPUT_REGISTER, &FC04_handler);
   _mbServer.registerWorker(MODBUS_NODE_ID, WRITE_HOLD_REGISTER, &FC06_handler);
   _mbServer.registerWorker(MODBUS_NODE_ID, WRITE_MULT_REGISTERS,&FC16_handler);
 
-  // Démarrer la tâche FreeRTOS eModbus
+  // Start the eModbus FreeRTOS task
   _mbServer.begin(Serial1, 1);  // core 1 (core 0 = WiFi/BT, core 1 = app)
 
   Serial.printf("[MODBUS] RTU slave ID=%d @ %lu baud OK (eModbus)\n",
                 MODBUS_NODE_ID, (unsigned long)MODBUS_BAUD);
 }
 
-// ─── Poll : mise à jour IR depuis l'état IO courant ──────────────────────────
-// Appelé depuis la slow loop — pas de Modbus polling nécessaire (tâche FreeRTOS)
+// ─── Poll: update IR from the current IO state ──────────────────────────
+// Called from the slow loop — no Modbus polling needed (FreeRTOS task)
 void modbus_poll() {
   // DI status bitfield
   uint16_t di_bits = 0;
@@ -243,10 +243,10 @@ void modbus_poll() {
   portEXIT_CRITICAL(&_reg_mux);
 }
 
-// ─── Accesseur HR thread-safe pour ejector.h / cip.h ────────────────────────
+// ─── Thread-safe HR accessor for ejector.h / cip.h ────────────────────────
 uint16_t hr_get(uint16_t idx) { return _hr_get(idx); }
 
-// ─── Callback RPM depuis rpm_counter.h ───────────────────────────────────────
+// ─── RPM callback from rpm_counter.h ───────────────────────────────────────
 void rpm_update_modbus() {
   extern uint16_t rpm_get(uint8_t);
   portENTER_CRITICAL(&_reg_mux);

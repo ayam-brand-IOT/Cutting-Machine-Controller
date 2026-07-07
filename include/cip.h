@@ -6,14 +6,14 @@ extern uint16_t hr_get(uint16_t idx);
 extern void ir_set(uint16_t idx, uint16_t val);
 
 /**
- * Cycle CIP solénoïde (non-bloquant)
- * 
- *   CIP_ENABLE=0 → solénoïde OFF, état=IDLE
- *   CIP_ENABLE=1 → cycle continu :
+ * CIP solenoid cycle (non-blocking)
+ *
+ *   CIP_ENABLE=0 → solenoid OFF, state=IDLE
+ *   CIP_ENABLE=1 → continuous cycle:
  *     ON (hr_get(HR_CIP_ON_TIME) ms) → OFF (hr_get(HR_CIP_OFF_TIME) ms) → ON ...
- * 
- * Le changement de CIP_ENABLE prend effet immédiatement.
- * Changement de ON/OFF time prend effet au prochain changement d'état.
+ *
+ * Changing CIP_ENABLE takes effect immediately.
+ * Changing ON/OFF time takes effect on the next state change.
  */
 
 enum CipState : uint8_t {
@@ -40,29 +40,29 @@ void cip_init() {
 void cip_update(unsigned long now) {
   bool enable = (hr_get(HR_CIP_ENABLE) != 0);
 
-  // Désactivation immédiate
+  // Immediate deactivation
   if (!enable) {
     if (_cip.state != CIP_IDLE) {
       io_set_output(DO_CIP, false);
       _cip.state = CIP_IDLE;
-      Serial.println(F("[CIP] Arrêt cycle"));
+      Serial.println(F("[CIP] Cycle stopped"));
     }
     ir_set(IR_CIP_STATE, CIP_IDLE);
     return;
   }
 
-  // Démarrage cycle
+  // Start cycle
   if (_cip.state == CIP_IDLE) {
     io_set_output(DO_CIP, true);
     _cip.state       = CIP_ON;
     _cip.timer_start = now;
-    Serial.println(F("[CIP] Démarrage cycle - ON"));
+    Serial.println(F("[CIP] Starting cycle - ON"));
   }
 
   uint16_t on_ms  = hr_get(HR_CIP_ON_TIME);
   uint16_t off_ms = hr_get(HR_CIP_OFF_TIME);
 
-  // Clamp valeurs
+  // Clamp values
   if (on_ms  < CIP_TIME_MIN_MS) on_ms  = CIP_TIME_MIN_MS;
   if (off_ms < CIP_TIME_MIN_MS) off_ms = CIP_TIME_MIN_MS;
 

@@ -3,9 +3,9 @@
 #include "config.h"
 
 /**
- * Comptage RPM par interruption hardware (RISING)
- * Utilise directement DIN_FB_BLADE / DIN_FB_WHEEL1 / DIN_FB_WHEEL2
- * qui sont les GPIO physiques (ex. GPIO5, GPIO6, GPIO7)
+ * RPM counting via hardware interrupt (RISING)
+ * Uses DIN_FB_BLADE / DIN_FB_WHEEL1 / DIN_FB_WHEEL2 directly,
+ * which are the physical GPIOs (e.g. GPIO5, GPIO6, GPIO7)
  */
 
 struct RpmChannel {
@@ -15,7 +15,7 @@ struct RpmChannel {
 
 static RpmChannel _rpm[3];
 
-// ─── ISR (IRAM pour perf) ────────────────────────────────────────────────────
+// ─── ISR (IRAM for performance) ────────────────────────────────────────────────────
 static void IRAM_ATTR _isr_blade()  { _rpm[0].pulse_count++; }
 static void IRAM_ATTR _isr_wheel1() { _rpm[1].pulse_count++; }
 static void IRAM_ATTR _isr_wheel2() { _rpm[2].pulse_count++; }
@@ -27,11 +27,11 @@ void rpm_init() {
   attachInterrupt(digitalPinToInterrupt(DIN_FB_WHEEL1), _isr_wheel1, RISING);
   attachInterrupt(digitalPinToInterrupt(DIN_FB_WHEEL2), _isr_wheel2, RISING);
 
-  Serial.printf("[RPM] Interruptions: Blade=GPIO%d, Wheel1=GPIO%d, Wheel2=GPIO%d\n",
+  Serial.printf("[RPM] Interrupts: Blade=GPIO%d, Wheel1=GPIO%d, Wheel2=GPIO%d\n",
                 DIN_FB_BLADE, DIN_FB_WHEEL1, DIN_FB_WHEEL2);
 }
 
-void rpm_update_modbus();   // implémenté dans modbus_handler.h
+void rpm_update_modbus();   // implemented in modbus_handler.h
 
 void rpm_calculate() {
   extern uint16_t g_hr[];
