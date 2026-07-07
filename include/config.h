@@ -36,13 +36,13 @@
 // ─── RS485 UART1 ──────────────────────────────────────────────────────────────
 #define RS485_TX_PIN      17   // TXD1
 #define RS485_RX_PIN      18   // RXD1
-#define RS485_DE_PIN      -1   // -1 = auto-direction (RE#=DE câblé en dur)
+#define RS485_DE_PIN      21   // -1 = auto-direction (RE#=DE câblé en dur)
                                // Sinon indiquer le GPIO DE ici
 
 // ─── Modbus ───────────────────────────────────────────────────────────────────
 #define MODBUS_NODE_ID    1
-#define MODBUS_BAUD       19200
-#define MODBUS_CONFIG     SERIAL_8E1   // 8E1 = standard Modbus
+#define MODBUS_BAUD       9600
+#define MODBUS_CONFIG     SERIAL_8N1   // 8N1 = standard Modbus
 
 /**
  * ════════════════════════════════════════════════════════════════
@@ -113,7 +113,7 @@
 #define DEFAULT_EJECTOR_DELAY_MS      200
 #define DEFAULT_EJECTOR_DURATION_MS   500
 #define DEFAULT_EJECTOR_ENABLE          1
-#define DEFAULT_CIP_ON_MS            2000
+#define DEFAULT_CIP_ON_MS             200
 #define DEFAULT_CIP_OFF_MS           8000
 #define DEFAULT_CIP_ENABLE              1
 #define DEFAULT_PPR                     1

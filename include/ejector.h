@@ -25,36 +25,45 @@ enum EjectorState : uint8_t {
 };
 
 struct EjectorCtrl {
-  EjectorState state;
+  EjectorState  state;
   unsigned long timer_start;
-  uint16_t      count;        // nb d'éjections (exposé Modbus)
-  bool          last_belly;   // pour détection front montant
+  uint16_t      count;           // nb d'éjections (exposé Modbus)
+  bool          last_belly;      // pour détection front montant
+  uint8_t       belly_confirm;   // compteur anti-rebond (doit rester HIGH 2 lectures de suite)
 };
 
 static EjectorCtrl _ej = {};
 
 
 void ejector_init() {
-  _ej.state       = EJ_IDLE;
-  _ej.timer_start = 0;
-  _ej.count       = 0;
-  _ej.last_belly  = false;
+  _ej.state        = EJ_IDLE;
+  _ej.timer_start  = 0;
+  _ej.count        = 0;
+  _ej.last_belly   = false;
+  _ej.belly_confirm = 0;
   io_set_output(DO_EJECTOR, false);
   Serial.println(F("[EJECTOR] Init OK"));
 }
 
 void ejector_update(unsigned long now) {
+  if (!g_io.inputs_valid) return;  // attendre la 1ère lecture DIN réelle
   bool belly = g_io.belly_fiber;
   bool enable = hr_get(HR_EJECTOR_ENABLE);
 
   switch (_ej.state) {
 
     case EJ_IDLE:
-      // Front montant sur belly fiber
-      if (enable && belly && !_ej.last_belly) {
+      // Anti-rebond : belly doit être HIGH sur 2 lectures consécutives (200ms)
+      // avant de déclencher — filtre les glitches et pins flottantes
+      if (enable && belly) {
+        _ej.belly_confirm++;
+      } else {
+        _ej.belly_confirm = 0;
+      }
+
+      if (enable && _ej.belly_confirm == 2) {   // front confirmé
         uint16_t delay_ms = hr_get(HR_EJECTOR_DELAY);
         if (delay_ms == 0) {
-          // Pas de délai → on tire directement
           io_set_output(DO_EJECTOR, true);
           _ej.timer_start = now;
           _ej.state       = EJ_FIRING;
@@ -96,7 +105,8 @@ void ejector_update(unsigned long now) {
       break;
   }
 
-  _ej.last_belly = belly;
+  _ej.last_belly    = belly;
+  _ej.belly_confirm = belly ? _ej.belly_confirm : 0;  // reset si signal retombe
 
   // Mise à jour registres Modbus
   ir_set(IR_EJECTOR_COUNT, _ej.count);

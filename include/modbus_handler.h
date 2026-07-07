@@ -26,7 +26,7 @@ static portMUX_TYPE _reg_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // ─── Serveur RTU eModbus ──────────────────────────────────────────────────────
 // Constructeur : (DE_pin) — gère RE/DE automatiquement
-static ModbusServerRTU _mbServer(RS485_DE_PIN);
+static ModbusServerRTU _mbServer(2000, RS485_DE_PIN);
 
 // ─── Helpers lecture/écriture registres thread-safe ──────────────────────────
 static uint16_t _hr_get(uint16_t idx) {
