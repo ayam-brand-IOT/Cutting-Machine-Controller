@@ -406,6 +406,7 @@ void Waveshare8DI8DO::_serviceEjector(uint32_t now) {
           _rawSet(_ejector.outputCh - 1, true);
           _ejector.timer = now;
           _ejector.state = EJ_FIRE;
+          _ejector.count++;
         } else {
           _ejector.timer = now;
           _ejector.state = EJ_WAIT;
@@ -417,6 +418,7 @@ void Waveshare8DI8DO::_serviceEjector(uint32_t now) {
         _rawSet(_ejector.outputCh - 1, true);
         _ejector.timer = now;
         _ejector.state = EJ_FIRE;
+        _ejector.count++;
       }
       break;
     case EJ_FIRE:

@@ -1,82 +1,248 @@
 /**
- * Fish Processing Controller — Waveshare ESP32-S3-POE-ETH-8DI-8DO
+ * Fish Cutting/Gutting Controller — application firmware
+ * Board: Waveshare ESP32-S3-POE-ETH-8DI-8DO
  *
- * Rewritten on top of the waveshare-8DI-8DO library. All the hand-rolled
- * io_handler / rpm_counter / ejector / cip / modbus_handler headers under
- * include/ are now superseded by the driver — this sketch is the whole app.
+ * WHAT THIS CONTROLLER DOES
+ *   It is, above all, a telemetry node for a SCADA. It reads the whole machine
+ *   (blade/wheel RPM, motor trip/on, belt, belly fiber), latches alarms, and
+ *   publishes everything over Modbus RTU (RS485). It actively controls only two
+ *   things, both non-blocking:
+ *     - EJECTOR : the belly-orientation fiber triggers a delayed, timed pulse.
+ *     - CIP     : a cleaning valve cycles ON/OFF on a fixed schedule.
+ *   Motors are NOT driven here — they are telemetry only. Alarms are signal-only
+ *   (they never cut an output); the SCADA/PLC decides what to do.
  *
- * Wiring (channel = silkscreen label):
- *   DI1  Belly orientation fiber (ejector trigger, 24V pulse)
- *   DI2  Blade RPM feedback        DI3  Wheel1 RPM      DI4  Wheel2 RPM
- *   DI5  Motors trip               DI6  Motors ON       DI7  Belt feedback
- *   DO1  Ejector solenoid          DO2  CIP solenoid
- *
- * Everything is non-blocking: io.update() services inputs, the ejector and CIP
- * state machines, output timers, and applies queued Modbus writes. No delay()
- * in the control loop.
+ * ARCHITECTURE
+ *   - lib/waveshare-8DI-8DO : board driver (safe-boot IO, debounce, RPM, ejector, CIP)
+ *   - lib/IndustrialCore    : reusable Scheduler / AlarmManager / ConsoleReporter / ModbusBank
+ *   - src/config.h          : every tunable parameter + the Modbus register map
+ *   - src/MachineTypes.h    : ControlParams + Telemetry structs
+ *   - src/main.cpp          : this glue — no delay() in the control loop
  */
 #include <Arduino.h>
+#include <string.h>
 #include <Waveshare8DI8DO.h>
 
-// ─── Channel map ──────────────────────────────────────────────────────────────
-static const uint8_t DI_BELLY   = 1;   // belly orientation fiber
-static const uint8_t DI_BLADE   = 2;   // blade RPM feedback
-static const uint8_t DI_WHEEL1  = 3;
-static const uint8_t DI_WHEEL2  = 4;
-static const uint8_t DI_TRIP    = 5;   // motors trip
-static const uint8_t DI_ON      = 6;   // motors ON
-static const uint8_t DI_BELT    = 7;   // belt feedback
-static const uint8_t DO_EJECTOR = 1;
-static const uint8_t DO_CIP     = 2;
+#include "Scheduler.h"
+#include "AlarmManager.h"
+#include "ConsoleReporter.h"
+#include "ModbusBank.h"
 
-// ─── Process defaults (same values as the previous firmware) ─────────────────
-static const uint32_t EJECT_DELAY_MS = 200;
-static const uint32_t EJECT_DUR_MS   = 500;
-static const uint32_t CIP_ON_MS      = 2000;
-static const uint32_t CIP_OFF_MS     = 8000;
+#include "config.h"
+#include "MachineTypes.h"
 
+// ─── Objects ─────────────────────────────────────────────────────────────────
 Waveshare8DI8DO io;
-uint32_t lastLog = 0;
+ConsoleReporter console;
+AlarmManager    alarms;
+ModbusBank      modbus;
 
-void setup() {
-  Serial.begin(115200);
-  delay(500);
-  Serial.println(F("\n=== Fish Controller v2.0 (Waveshare8DI8DO) ==="));
+ControlParams ctrl;
+Telemetry     tlm;
+bool          ioHealthy = false;
 
-  // Starts I2C, forces every output OFF before enabling them, sets up inputs.
-  io.begin();
-  io.setInputDebounce(0, 5);   // 5 ms on all channels (pulse counting is ISR-based)
+Periodic telemetrySched(cfg::TELEMETRY_MS);
+Periodic consoleSched(cfg::CONSOLE_MS);
 
-  // Ejector: rising edge on belly fiber -> wait delay -> fire DO1 for duration.
-  io.configureEjector(DI_BELLY, DO_EJECTOR, EJECT_DELAY_MS, EJECT_DUR_MS);
-  io.enableEjector(true);
+// ─── Modbus register banks (owned here, exposed by ModbusBank) ───────────────
+uint16_t mbInput[cfg::IR_COUNT]   = {0};
+uint16_t mbHolding[cfg::HR_COUNT] = {0};
+uint8_t  mbCoils[cfg::CO_COUNT]   = {0};
+uint8_t  mbDiscrete[cfg::DI_COUNT]= {0};
 
-  // CIP: continuous ON/OFF cycle on DO2.
-  io.configureCIP(DO_CIP, CIP_ON_MS, CIP_OFF_MS);
-  io.enableCIP(true);
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-  // Modbus RTU slave over isolated RS485: ID 1, 19200 8E1 (as before).
-  if (io.beginModbusSlave(/*slaveId=*/1, /*baud=*/19200, SERIAL_8E1, /*core=*/1)) {
-    Serial.println(F("[MODBUS] RTU slave ID=1 @ 19200 8E1"));
-  } else {
-    Serial.println(F("[MODBUS] slave failed to start"));
+// Push the current set-points into the board driver.
+static void applyControlToIO() {
+  io.setInputDebounce(0, ctrl.debounceMs);
+  io.configureEjector(cfg::CH_BELLY, cfg::CH_EJECTOR, ctrl.ejectDelayMs, ctrl.ejectDurationMs);
+  io.enableEjector(ctrl.ejectEnabled);
+  io.configureCIP(cfg::CH_CIP, ctrl.cipOnMs, ctrl.cipOffMs);
+  io.enableCIP(ctrl.cipEnabled);
+}
+
+// Seed the writable Modbus tables from the current set-points.
+static void seedModbusTables() {
+  mbHolding[cfg::HR_EJECT_DELAY]    = (uint16_t)ctrl.ejectDelayMs;
+  mbHolding[cfg::HR_EJECT_DURATION] = (uint16_t)ctrl.ejectDurationMs;
+  mbHolding[cfg::HR_CIP_ON]         = (uint16_t)ctrl.cipOnMs;
+  mbHolding[cfg::HR_CIP_OFF]        = (uint16_t)ctrl.cipOffMs;
+  mbHolding[cfg::HR_PPR_BLADE]      = ctrl.pprBlade;
+  mbHolding[cfg::HR_PPR_WHEEL1]     = ctrl.pprWheel1;
+  mbHolding[cfg::HR_PPR_WHEEL2]     = ctrl.pprWheel2;
+  mbHolding[cfg::HR_BLADE_RPM_MIN]  = ctrl.bladeRpmMin;
+  mbHolding[cfg::HR_DEBOUNCE_MS]    = (uint16_t)ctrl.debounceMs;
+  mbCoils[cfg::CO_EJECT_ENABLE]     = ctrl.ejectEnabled ? 1 : 0;
+  mbCoils[cfg::CO_CIP_ENABLE]       = ctrl.cipEnabled ? 1 : 0;
+  mbCoils[cfg::CO_ALARM_ACK]        = 0;
+}
+
+// React to a SCADA write (called from ModbusBank::pump in the loop task).
+static void onModbusWrite(uint8_t kind, uint16_t index, uint16_t value) {
+  if (kind == MB_WRITE_HOLDING) {
+    switch (index) {
+      case cfg::HR_EJECT_DELAY:    ctrl.ejectDelayMs    = value;
+        io.configureEjector(cfg::CH_BELLY, cfg::CH_EJECTOR, ctrl.ejectDelayMs, ctrl.ejectDurationMs); break;
+      case cfg::HR_EJECT_DURATION: ctrl.ejectDurationMs = value;
+        io.configureEjector(cfg::CH_BELLY, cfg::CH_EJECTOR, ctrl.ejectDelayMs, ctrl.ejectDurationMs); break;
+      case cfg::HR_CIP_ON:         ctrl.cipOnMs  = value; io.configureCIP(cfg::CH_CIP, ctrl.cipOnMs, ctrl.cipOffMs); break;
+      case cfg::HR_CIP_OFF:        ctrl.cipOffMs = value; io.configureCIP(cfg::CH_CIP, ctrl.cipOnMs, ctrl.cipOffMs); break;
+      case cfg::HR_PPR_BLADE:      ctrl.pprBlade  = value ? value : 1; break;
+      case cfg::HR_PPR_WHEEL1:     ctrl.pprWheel1 = value ? value : 1; break;
+      case cfg::HR_PPR_WHEEL2:     ctrl.pprWheel2 = value ? value : 1; break;
+      case cfg::HR_BLADE_RPM_MIN:  ctrl.bladeRpmMin = value; break;
+      case cfg::HR_DEBOUNCE_MS:    ctrl.debounceMs = value; io.setInputDebounce(0, value); break;
+      default: break;
+    }
+    console.log(ConsoleReporter::INFO, "Modbus set HR[%u] = %u", index, value);
+  } else {  // MB_WRITE_COIL
+    switch (index) {
+      case cfg::CO_EJECT_ENABLE: ctrl.ejectEnabled = value; io.enableEjector(value); break;
+      case cfg::CO_CIP_ENABLE:   ctrl.cipEnabled   = value; io.enableCIP(value);     break;
+      case cfg::CO_ALARM_ACK:
+        if (value) { alarms.acknowledgeAll(); mbCoils[cfg::CO_ALARM_ACK] = 0;
+                     console.log(ConsoleReporter::INFO, "Alarms acknowledged via Modbus"); }
+        break;
+      default: break;
+    }
   }
+}
 
-  Serial.printf("[BOOT] earlyInitRan=%s  outputs=0x%02X\n",
-                io.earlyInitRan() ? "yes" : "no", io.getOutputsMask());
-  Serial.println(F("Init OK - Running"));
+// Rebuild the machine snapshot, evaluate alarms, mirror into the Modbus tables.
+static void refreshTelemetry() {
+  tlm.rpmBlade  = (uint16_t)(io.getRPM(cfg::CH_BLADE,  ctrl.pprBlade)  + 0.5f);
+  tlm.rpmWheel1 = (uint16_t)(io.getRPM(cfg::CH_WHEEL1, ctrl.pprWheel1) + 0.5f);
+  tlm.rpmWheel2 = (uint16_t)(io.getRPM(cfg::CH_WHEEL2, ctrl.pprWheel2) + 0.5f);
+  tlm.inputsMask  = io.readInputsMask();
+  tlm.outputsMask = io.getOutputsMask();
+  tlm.motorTrip = io.readInput(cfg::CH_TRIP);
+  tlm.motorOn   = io.readInput(cfg::CH_MOTORON);
+  tlm.belt      = io.readInput(cfg::CH_BELT);
+  tlm.belly     = io.readInput(cfg::CH_BELLY);
+  tlm.ejectorState = io.ejectorState();
+  tlm.ejectorCount = io.ejectorCount();
+  tlm.cipState     = io.cipState();
+
+  // Alarm evaluation (signal-only).
+  alarms.update(cfg::ALM_MOTOR_TRIP,   tlm.motorTrip);
+  alarms.update(cfg::ALM_BLADE_RPM_LOW, tlm.motorOn && (tlm.rpmBlade < ctrl.bladeRpmMin));
+  alarms.update(cfg::ALM_BELT_STOPPED,  tlm.motorOn && !tlm.belt);
+  alarms.update(cfg::ALM_IO_FAULT,     !ioHealthy);
+  tlm.alarmMask   = alarms.activeMask();
+  tlm.alarmUnack  = alarms.unackedMask();
+  tlm.systemState = alarms.any() ? SYS_ALARM : SYS_RUN;
+  tlm.uptimeS     = millis() / 1000;
+
+  // Mirror into Modbus input registers.
+  mbInput[cfg::IR_RPM_BLADE]     = tlm.rpmBlade;
+  mbInput[cfg::IR_RPM_WHEEL1]    = tlm.rpmWheel1;
+  mbInput[cfg::IR_RPM_WHEEL2]    = tlm.rpmWheel2;
+  mbInput[cfg::IR_INPUTS_MASK]   = tlm.inputsMask;
+  mbInput[cfg::IR_OUTPUTS_MASK]  = tlm.outputsMask;
+  mbInput[cfg::IR_EJECTOR_STATE] = tlm.ejectorState;
+  mbInput[cfg::IR_EJECTOR_CNT_LO]= (uint16_t)(tlm.ejectorCount & 0xFFFF);
+  mbInput[cfg::IR_EJECTOR_CNT_HI]= (uint16_t)((tlm.ejectorCount >> 16) & 0xFFFF);
+  mbInput[cfg::IR_CIP_STATE]     = tlm.cipState;
+  mbInput[cfg::IR_MOTOR_TRIP]    = tlm.motorTrip;
+  mbInput[cfg::IR_MOTOR_ON]      = tlm.motorOn;
+  mbInput[cfg::IR_BELT]          = tlm.belt;
+  mbInput[cfg::IR_BELLY]         = tlm.belly;
+  mbInput[cfg::IR_ALARM_MASK]    = tlm.alarmMask;
+  mbInput[cfg::IR_ALARM_UNACK]   = tlm.alarmUnack;
+  mbInput[cfg::IR_SYS_STATE]     = tlm.systemState;
+  mbInput[cfg::IR_UPTIME_LO]     = (uint16_t)(tlm.uptimeS & 0xFFFF);
+  mbInput[cfg::IR_UPTIME_HI]     = (uint16_t)((tlm.uptimeS >> 16) & 0xFFFF);
+  mbInput[cfg::IR_FW_VERSION]    = cfg::FW_VERSION;
+
+  for (uint8_t i = 0; i < cfg::DI_COUNT; i++)
+    mbDiscrete[i] = (tlm.inputsMask >> i) & 0x01;
+}
+
+static void printStatus() {
+  console.section("STATUS");
+  console.row("System",          "%s", systemStateName(tlm.systemState));
+  console.row("Uptime",          "%lu s", (unsigned long)tlm.uptimeS);
+  console.row("RPM blade/w1/w2", "%u / %u / %u", tlm.rpmBlade, tlm.rpmWheel1, tlm.rpmWheel2);
+  console.row("Ejector",         "%s  fires=%lu  (DO%u %s)",
+              ejectorStateName(tlm.ejectorState), (unsigned long)tlm.ejectorCount,
+              cfg::CH_EJECTOR, ctrl.ejectEnabled ? "enabled" : "disabled");
+  console.row("CIP",             "%s  (DO%u %s)",
+              cipStateName(tlm.cipState), cfg::CH_CIP,
+              ctrl.cipEnabled ? "enabled" : "disabled");
+  console.row("Motors",          "trip=%d  on=%d  belt=%d", tlm.motorTrip, tlm.motorOn, tlm.belt);
+  console.row("IO mask",         "DI=0x%02X  DO=0x%02X", tlm.inputsMask, tlm.outputsMask);
+
+  if (alarms.any()) {
+    char list[128] = "";
+    for (uint8_t i = 0; i < cfg::ALM_COUNT; i++) {
+      if (alarms.active(i)) {
+        if (list[0]) strncat(list, ", ", sizeof(list) - strlen(list) - 1);
+        strncat(list, alarms.name(i), sizeof(list) - strlen(list) - 1);
+      }
+    }
+    console.row("ALARMS", "0x%04X  %s", tlm.alarmMask, list);
+  } else {
+    console.row("Alarms", "none");
+  }
+}
+
+static void printModbusMap() {
+  console.section("MODBUS MAP (slave 1)");
+  console.row("Input regs 3000x",  "RPM, IO masks, ejector/CIP state, alarms, uptime");
+  console.row("Holding 4000x",     "ejector/CIP timings, PPR, RPM min, debounce");
+  console.row("Coils 0000x",       "1=ejector en, 2=CIP en, 3=alarm ack");
+  console.row("Discrete 1000x",    "DI1..DI8");
+}
+
+// ─── Arduino entry points ────────────────────────────────────────────────────
+void setup() {
+  Serial.begin(cfg::SERIAL_BAUD);
+  delay(300);   // one-time settle at boot (not in the control path)
+
+  console.begin(Serial, cfg::CONSOLE_ANSI);
+  char sub[96];
+  snprintf(sub, sizeof(sub), "v%s  |  %s", cfg::FW_VERSION_STR, cfg::FW_BOARD);
+  console.banner(cfg::FW_NAME, sub);
+
+  ctrl.loadDefaults();
+
+  // Board bring-up: outputs are forced OFF before anything is enabled.
+  ioHealthy = io.begin();
+  console.log(ioHealthy ? ConsoleReporter::INFO : ConsoleReporter::ERROR,
+              "Board init %s  (earlyInit=%s, outputs=0x%02X)",
+              ioHealthy ? "OK" : "FAILED",
+              io.earlyInitRan() ? "yes" : "no", io.getOutputsMask());
+
+  applyControlToIO();
+  console.log(ConsoleReporter::INFO,
+              "Ejector DI%u->DO%u %lu/%lu ms | CIP DO%u %lu/%lu ms",
+              cfg::CH_BELLY, cfg::CH_EJECTOR,
+              (unsigned long)ctrl.ejectDelayMs, (unsigned long)ctrl.ejectDurationMs,
+              cfg::CH_CIP, (unsigned long)ctrl.cipOnMs, (unsigned long)ctrl.cipOffMs);
+
+  // RS485 + Modbus RTU slave for the SCADA.
+  io.beginRS485(cfg::MB_BAUD, cfg::MB_CONFIG);
+  seedModbusTables();
+  bool mbok = modbus.begin(io.rs485(), cfg::MB_SLAVE_ID, W8DI8DO_RS485_RTS, cfg::MB_CORE,
+                           mbHolding, cfg::HR_COUNT, mbInput, cfg::IR_COUNT,
+                           mbCoils, cfg::CO_COUNT, mbDiscrete, cfg::DI_COUNT,
+                           onModbusWrite);
+  console.log(mbok ? ConsoleReporter::INFO : ConsoleReporter::ERROR,
+              "Modbus RTU slave ID=%u @ %lu 8E1 %s",
+              cfg::MB_SLAVE_ID, (unsigned long)cfg::MB_BAUD, mbok ? "up" : "FAILED");
+
+  alarms.begin(ALARM_NAMES, cfg::ALM_COUNT, /*latching=*/true);
+
+  printModbusMap();
+  console.log(ConsoleReporter::INFO, "Running.");
+  console.blank();
 }
 
 void loop() {
-  io.update();
+  io.update();      // inputs, ejector, CIP, output timers
+  modbus.pump();    // apply queued SCADA writes
 
   uint32_t now = millis();
-  if (now - lastLog >= 1000) {
-    lastLog = now;
-    Serial.printf(
-      "DI=0x%02X DO=0x%02X | RPM blade=%.0f w1=%.0f w2=%.0f | trip=%d on=%d belt=%d\n",
-      io.readInputsMask(), io.getOutputsMask(),
-      io.getRPM(DI_BLADE), io.getRPM(DI_WHEEL1), io.getRPM(DI_WHEEL2),
-      io.readInput(DI_TRIP), io.readInput(DI_ON), io.readInput(DI_BELT));
-  }
+  if (telemetrySched.ready(now)) refreshTelemetry();
+  if (consoleSched.ready(now))   printStatus();
 }

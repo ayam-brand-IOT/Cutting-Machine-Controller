@@ -88,6 +88,13 @@ public:
   bool earlyInitRan();
   bool rtcPresent() const { return _rtcPresent; }
   bool i2cReady()   const { return _i2cStarted; }
+  bool outputsHealthy() const { return _outputsReady; }
+
+  // Read-only process introspection (for telemetry / SCADA).
+  uint8_t  ejectorState() const { return _ejector.state; }  // 0 idle,1 wait,2 fire
+  uint32_t ejectorCount() const { return _ejector.count; }  // fires since boot
+  uint8_t  cipState()     const { return _cip.state; }      // 0 idle,1 on,2 off
+
   HardwareSerial& rs485() { return Serial1; }
 
   // Half-duplex RS485 send with automatic DE control (for use WITHOUT the
@@ -123,6 +130,7 @@ private:
     uint8_t  state;
     uint32_t timer;
     bool     lastInput;
+    uint32_t count;               // fires since boot (telemetry)
   };
 
   enum { CIP_IDLE = 0, CIP_ON, CIP_OFF };
