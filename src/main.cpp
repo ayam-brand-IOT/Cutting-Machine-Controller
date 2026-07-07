@@ -207,7 +207,9 @@ void setup() {
   ctrl.loadDefaults();
 
   // Board bring-up: outputs are forced OFF before anything is enabled.
+  io.setOutputPolarity(false);
   ioHealthy = io.begin();
+  
   console.log(ioHealthy ? ConsoleReporter::INFO : ConsoleReporter::ERROR,
               "Board init %s  (earlyInit=%s, outputs=0x%02X)",
               ioHealthy ? "OK" : "FAILED",
