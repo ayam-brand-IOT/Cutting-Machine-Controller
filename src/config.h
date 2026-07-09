@@ -37,8 +37,8 @@ constexpr uint8_t CH_EJECTOR = 1;   // DO1  ejector solenoid
 constexpr uint8_t CH_CIP     = 2;   // DO2  CIP cleaning valve
 
 // ─── Ejector (belly-triggered pulse) ────────────────────────────────────────
-constexpr uint32_t EJECT_DELAY_MS     = 200;    // detection -> fire delay
-constexpr uint32_t EJECT_DURATION_MS  = 500;    // fire pulse width
+constexpr uint32_t EJECT_DELAY_MS     = 1;    // detection -> fire delay
+constexpr uint32_t EJECT_DURATION_MS  = 5;    // fire pulse width
 constexpr bool     EJECT_ENABLED_BOOT = true;
 
 // ─── CIP (periodic cleaning valve) ──────────────────────────────────────────
@@ -46,7 +46,7 @@ constexpr bool     EJECT_ENABLED_BOOT = true;
 // D every T", set CIP_ON = D and CIP_OFF = T - D.
 constexpr uint32_t CIP_ON_MS        = 2000;
 constexpr uint32_t CIP_OFF_MS       = 8000;
-constexpr bool     CIP_ENABLED_BOOT = true;
+constexpr bool     CIP_ENABLED_BOOT = false;
 
 // ─── RPM scaling / thresholds ───────────────────────────────────────────────
 constexpr uint16_t PPR_BLADE     = 1;    // pulses per revolution
@@ -55,7 +55,7 @@ constexpr uint16_t PPR_WHEEL2    = 1;
 constexpr uint16_t BLADE_RPM_MIN = 100;  // alarm below this while motors are ON
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
-constexpr uint32_t DEBOUNCE_MS = 5;      // applies to all DI (pulse count is ISR-based)
+constexpr uint32_t DEBOUNCE_MS = 1;      // applies to all DI (pulse count is ISR-based)
 
 // ─── Modbus RTU (SCADA link) ────────────────────────────────────────────────
 constexpr uint8_t  MB_SLAVE_ID = 1;
@@ -68,6 +68,11 @@ constexpr uint32_t SERIAL_BAUD    = 115200;
 constexpr uint32_t TELEMETRY_MS   = 100;   // 10 Hz: refresh telemetry + alarms
 constexpr uint32_t CONSOLE_MS     = 1000;  // 1 Hz: print the status table
 constexpr bool     CONSOLE_ANSI   = true;  // colored console (off for plain terminals)
+
+// ─── Boot output lockout ─────────────────────────────────────────────────────
+// All actuated outputs (ejector, CIP) stay disabled for this long after boot,
+// so nothing fires while the machine and sensors are still settling.
+constexpr uint32_t BOOT_OUTPUT_LOCKOUT_MS = 10000;
 
 // ─── Alarm ids (index into ALARM_NAMES) ─────────────────────────────────────
 enum AlarmId : uint8_t {

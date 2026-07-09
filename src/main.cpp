@@ -40,6 +40,7 @@ ModbusBank      modbus;
 ControlParams ctrl;
 Telemetry     tlm;
 bool          ioHealthy = false;
+bool          outputsUnlocked = false;   // true once the boot output lockout elapses
 
 Periodic telemetrySched(cfg::TELEMETRY_MS);
 Periodic consoleSched(cfg::CONSOLE_MS);
@@ -97,8 +98,10 @@ static void onModbusWrite(uint8_t kind, uint16_t index, uint16_t value) {
     console.log(ConsoleReporter::INFO, "Modbus set HR[%u] = %u", index, value);
   } else {  // MB_WRITE_COIL
     switch (index) {
-      case cfg::CO_EJECT_ENABLE: ctrl.ejectEnabled = value; io.enableEjector(value); break;
-      case cfg::CO_CIP_ENABLE:   ctrl.cipEnabled   = value; io.enableCIP(value);     break;
+      case cfg::CO_EJECT_ENABLE: ctrl.ejectEnabled = value;
+        if (outputsUnlocked) io.enableEjector(value); break;
+      case cfg::CO_CIP_ENABLE:   ctrl.cipEnabled   = value;
+        if (outputsUnlocked) io.enableCIP(value);     break;
       case cfg::CO_ALARM_ACK:
         if (value) { alarms.acknowledgeAll(); mbCoils[cfg::CO_ALARM_ACK] = 0;
                      console.log(ConsoleReporter::INFO, "Alarms acknowledged via Modbus"); }
@@ -216,6 +219,11 @@ void setup() {
               io.earlyInitRan() ? "yes" : "no", io.getOutputsMask());
 
   applyControlToIO();
+  // Boot output lockout: hold every actuated output OFF for the first
+  // BOOT_OUTPUT_LOCKOUT_MS. The real enable states are applied in loop() once
+  // the window elapses.
+  io.enableEjector(false);
+  io.enableCIP(false);
   console.log(ConsoleReporter::INFO,
               "Ejector DI%u->DO%u %lu/%lu ms | CIP DO%u %lu/%lu ms",
               cfg::CH_BELLY, cfg::CH_EJECTOR,
@@ -245,6 +253,13 @@ void loop() {
   modbus.pump();    // apply queued SCADA writes
 
   uint32_t now = millis();
+  if (!outputsUnlocked && now >= cfg::BOOT_OUTPUT_LOCKOUT_MS) {
+    outputsUnlocked = true;
+    io.enableEjector(ctrl.ejectEnabled);
+    io.enableCIP(ctrl.cipEnabled);
+    console.log(ConsoleReporter::INFO, "Boot output lockout ended; outputs enabled");
+  }
+
   if (telemetrySched.ready(now)) refreshTelemetry();
   if (consoleSched.ready(now))   printStatus();
 }

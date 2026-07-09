@@ -401,7 +401,7 @@ void Waveshare8DI8DO::_serviceEjector(uint32_t now) {
 
   switch (_ejector.state) {
     case EJ_IDLE:
-      if (cur && !_ejector.lastInput) {              // rising edge on belly fiber
+      if (!cur && _ejector.lastInput) {              // falling edge: belly fiber detects (active-low input)
         if (_ejector.delayMs == 0) {
           _rawSet(_ejector.outputCh - 1, true);
           _ejector.timer = now;
