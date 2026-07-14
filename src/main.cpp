@@ -53,11 +53,20 @@ uint8_t  mbDiscrete[cfg::DI_COUNT]= {0};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+static uint32_t beltTravelPulses() {
+  const float circumferenceMm = PI * cfg::BELT_ROLLER_DIAMETER_MM;
+  const float pulses =
+      cfg::SENSOR_TO_EJECTOR_MM * (float)ctrl.pprBelt / circumferenceMm;
+  return max(1UL, (uint32_t)lroundf(pulses));
+}
+
 // Push the current set-points into the board driver.
 static void applyControlToIO() {
   io.setInputDebounce(0, ctrl.debounceMs);
-  io.configureEjector(cfg::CH_BELLY, cfg::CH_EJECTOR, ctrl.ejectDelayMs, ctrl.ejectDurationMs);
-  io.enableEjector(ctrl.ejectEnabled);
+  io.configureDistanceEjector(cfg::CH_BELLY, cfg::CH_EJECTOR,
+                              cfg::CH_BELT, beltTravelPulses(),
+                              ctrl.ejectDurationMs);
+  io.enableEjector(false);
   io.configureCIP(cfg::CH_CIP, ctrl.cipOnMs, ctrl.cipOffMs);
   io.enableCIP(ctrl.cipEnabled);
 }
@@ -71,6 +80,7 @@ static void seedModbusTables() {
   mbHolding[cfg::HR_PPR_BLADE]      = ctrl.pprBlade;
   mbHolding[cfg::HR_PPR_WHEEL1]     = ctrl.pprWheel1;
   mbHolding[cfg::HR_PPR_WHEEL2]     = ctrl.pprWheel2;
+  mbHolding[cfg::HR_PPR_BELT]       = ctrl.pprBelt;
   mbHolding[cfg::HR_BLADE_RPM_MIN]  = ctrl.bladeRpmMin;
   mbHolding[cfg::HR_DEBOUNCE_MS]    = (uint16_t)ctrl.debounceMs;
   mbCoils[cfg::CO_EJECT_ENABLE]     = ctrl.ejectEnabled ? 1 : 0;
@@ -82,15 +92,25 @@ static void seedModbusTables() {
 static void onModbusWrite(uint8_t kind, uint16_t index, uint16_t value) {
   if (kind == MB_WRITE_HOLDING) {
     switch (index) {
-      case cfg::HR_EJECT_DELAY:    ctrl.ejectDelayMs    = value;
-        io.configureEjector(cfg::CH_BELLY, cfg::CH_EJECTOR, ctrl.ejectDelayMs, ctrl.ejectDurationMs); break;
+      // Legacy register kept only to preserve the existing Modbus map.
+      case cfg::HR_EJECT_DELAY:    ctrl.ejectDelayMs = value; break;
       case cfg::HR_EJECT_DURATION: ctrl.ejectDurationMs = value;
-        io.configureEjector(cfg::CH_BELLY, cfg::CH_EJECTOR, ctrl.ejectDelayMs, ctrl.ejectDurationMs); break;
+        io.setEjectorDuration(ctrl.ejectDurationMs);
+        io.enableEjector(outputsUnlocked && ctrl.ejectEnabled &&
+                         ctrl.ejectDurationMs > 0);
+        break;
       case cfg::HR_CIP_ON:         ctrl.cipOnMs  = value; io.configureCIP(cfg::CH_CIP, ctrl.cipOnMs, ctrl.cipOffMs); break;
       case cfg::HR_CIP_OFF:        ctrl.cipOffMs = value; io.configureCIP(cfg::CH_CIP, ctrl.cipOnMs, ctrl.cipOffMs); break;
       case cfg::HR_PPR_BLADE:      ctrl.pprBlade  = value ? value : 1; break;
       case cfg::HR_PPR_WHEEL1:     ctrl.pprWheel1 = value ? value : 1; break;
       case cfg::HR_PPR_WHEEL2:     ctrl.pprWheel2 = value ? value : 1; break;
+      case cfg::HR_PPR_BELT:
+        ctrl.pprBelt = value ? value : 1;
+        io.configureDistanceEjector(cfg::CH_BELLY, cfg::CH_EJECTOR,
+                                    cfg::CH_BELT, beltTravelPulses(),
+                                    ctrl.ejectDurationMs);
+        io.enableEjector(outputsUnlocked && ctrl.ejectEnabled);
+        break;
       case cfg::HR_BLADE_RPM_MIN:  ctrl.bladeRpmMin = value; break;
       case cfg::HR_DEBOUNCE_MS:    ctrl.debounceMs = value; io.setInputDebounce(0, value); break;
       default: break;
@@ -99,7 +119,8 @@ static void onModbusWrite(uint8_t kind, uint16_t index, uint16_t value) {
   } else {  // MB_WRITE_COIL
     switch (index) {
       case cfg::CO_EJECT_ENABLE: ctrl.ejectEnabled = value;
-        if (outputsUnlocked) io.enableEjector(value); break;
+        if (outputsUnlocked) io.enableEjector(value);
+        break;
       case cfg::CO_CIP_ENABLE:   ctrl.cipEnabled   = value;
         if (outputsUnlocked) io.enableCIP(value);     break;
       case cfg::CO_ALARM_ACK:
@@ -116,11 +137,16 @@ static void refreshTelemetry() {
   tlm.rpmBlade  = (uint16_t)(io.getRPM(cfg::CH_BLADE,  ctrl.pprBlade)  + 0.5f);
   tlm.rpmWheel1 = (uint16_t)(io.getRPM(cfg::CH_WHEEL1, ctrl.pprWheel1) + 0.5f);
   tlm.rpmWheel2 = (uint16_t)(io.getRPM(cfg::CH_WHEEL2, ctrl.pprWheel2) + 0.5f);
+  tlm.rpmBelt   = (uint16_t)(io.getRPM(cfg::CH_BELT,   ctrl.pprBelt)   + 0.5f);
+
   tlm.inputsMask  = io.readInputsMask();
   tlm.outputsMask = io.getOutputsMask();
   tlm.motorTrip = io.readInput(cfg::CH_TRIP);
   tlm.motorOn   = io.readInput(cfg::CH_MOTORON);
-  tlm.belt      = io.readInput(cfg::CH_BELT);
+  // Use the measured pulse frequency for the running state. Reading DI7 as a
+  // simple level makes the status flicker because FG is a pulse train.
+  tlm.belt      = (tlm.rpmBelt > 0);
+
   tlm.belly     = io.readInput(cfg::CH_BELLY);
   tlm.ejectorState = io.ejectorState();
   tlm.ejectorCount = io.ejectorCount();
@@ -140,6 +166,7 @@ static void refreshTelemetry() {
   mbInput[cfg::IR_RPM_BLADE]     = tlm.rpmBlade;
   mbInput[cfg::IR_RPM_WHEEL1]    = tlm.rpmWheel1;
   mbInput[cfg::IR_RPM_WHEEL2]    = tlm.rpmWheel2;
+  mbInput[cfg::IR_RPM_BELT]      = tlm.rpmBelt;
   mbInput[cfg::IR_INPUTS_MASK]   = tlm.inputsMask;
   mbInput[cfg::IR_OUTPUTS_MASK]  = tlm.outputsMask;
   mbInput[cfg::IR_EJECTOR_STATE] = tlm.ejectorState;
@@ -165,10 +192,13 @@ static void printStatus() {
   console.section("STATUS");
   console.row("System",          "%s", systemStateName(tlm.systemState));
   console.row("Uptime",          "%lu s", (unsigned long)tlm.uptimeS);
-  console.row("RPM blade/w1/w2", "%u / %u / %u", tlm.rpmBlade, tlm.rpmWheel1, tlm.rpmWheel2);
+  console.row("RPM blade/w1/w2/belt", "%u / %u / %u / %u",
+              tlm.rpmBlade, tlm.rpmWheel1, tlm.rpmWheel2, tlm.rpmBelt);
+  console.row("Eject travel",     "%lu FG pulses  (%.0f mm)",
+              (unsigned long)beltTravelPulses(), cfg::SENSOR_TO_EJECTOR_MM);
   console.row("Ejector",         "%s  fires=%lu  (DO%u %s)",
               ejectorStateName(tlm.ejectorState), (unsigned long)tlm.ejectorCount,
-              cfg::CH_EJECTOR, ctrl.ejectEnabled ? "enabled" : "disabled");
+              cfg::CH_EJECTOR, io.ejectorEnabled() ? "armed" : "interlocked");
   console.row("CIP",             "%s  (DO%u %s)",
               cipStateName(tlm.cipState), cfg::CH_CIP,
               ctrl.cipEnabled ? "enabled" : "disabled");
@@ -191,7 +221,7 @@ static void printStatus() {
 
 static void printModbusMap() {
   console.section("MODBUS MAP (slave 1)");
-  console.row("Input regs 3000x",  "RPM, IO masks, ejector/CIP state, alarms, uptime");
+  console.row("Input regs 3000x",  "blade/wheel/belt RPM, IO, ejector/CIP, alarms, uptime");
   console.row("Holding 4000x",     "ejector/CIP timings, PPR, RPM min, debounce");
   console.row("Coils 0000x",       "1=ejector en, 2=CIP en, 3=alarm ack");
   console.row("Discrete 1000x",    "DI1..DI8");

@@ -30,16 +30,18 @@ constexpr uint8_t CH_WHEEL1  = 3;   // DI3  wheel 1 RPM feedback
 constexpr uint8_t CH_WHEEL2  = 4;   // DI4  wheel 2 RPM feedback
 constexpr uint8_t CH_TRIP    = 5;   // DI5  motors trip  (telemetry only)
 constexpr uint8_t CH_MOTORON = 6;   // DI6  motors ON    (telemetry only)
-constexpr uint8_t CH_BELT    = 7;   // DI7  belt running (telemetry only)
+constexpr uint8_t CH_BELT    = 7;   // DI7  belt FG pulse feedback
 // DI8 spare.
 // Outputs — the only two things this controller actuates.
 constexpr uint8_t CH_EJECTOR = 1;   // DO1  ejector solenoid
 constexpr uint8_t CH_CIP     = 2;   // DO2  CIP cleaning valve
 
 // ─── Ejector (belly-triggered pulse) ────────────────────────────────────────
-constexpr uint32_t EJECT_DELAY_MS     = 1;    // detection -> fire delay
+// Legacy value retained so existing Modbus addresses remain compatible.
+// Distance-mode ejection does not use a fixed millisecond delay.
+constexpr uint32_t EJECT_DELAY_MS     = 1;
 constexpr uint32_t EJECT_DURATION_MS  = 5;    // fire pulse width
-constexpr bool     EJECT_ENABLED_BOOT = true;
+constexpr bool     EJECT_ENABLED_BOOT = true;  // arm DI1 -> distance tracking -> DO1
 
 // ─── CIP (periodic cleaning valve) ──────────────────────────────────────────
 // Continuous cycle: valve ON for CIP_ON, OFF for CIP_OFF, repeat. For "wash for
@@ -52,7 +54,14 @@ constexpr bool     CIP_ENABLED_BOOT = false;
 constexpr uint16_t PPR_BLADE     = 1;    // pulses per revolution
 constexpr uint16_t PPR_WHEEL1    = 1;
 constexpr uint16_t PPR_WHEEL2    = 1;
+constexpr uint16_t PPR_BELT      = 8;    // Motor FG pulses per motor revolution
 constexpr uint16_t BLADE_RPM_MIN = 100;  // alarm below this while motors are ON
+
+// ─── Belt-distance eject tracking ───────────────────────────────────────────
+// After DI1 detects an object, DI7 FG pulses track its travelled distance.
+// This assumes one motor revolution advances the belt by one roller turn.
+constexpr float BELT_ROLLER_DIAMETER_MM    = 50.0f;   // Driven roller diameter
+constexpr float SENSOR_TO_EJECTOR_MM        = 500.0f;  // Fiber-to-ejector travel distance
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
 constexpr uint32_t DEBOUNCE_MS = 1;      // applies to all DI (pulse count is ISR-based)
@@ -105,6 +114,7 @@ enum : uint16_t {
   IR_UPTIME_LO,       // seconds (low word)
   IR_UPTIME_HI,       // (high word)
   IR_FW_VERSION,      // 0xMMmm
+  IR_RPM_BELT,        // appended: preserves all existing register addresses
   IR_COUNT            // <-- array size
 };
 
@@ -119,6 +129,7 @@ enum : uint16_t {
   HR_PPR_WHEEL2,
   HR_BLADE_RPM_MIN,     // alarm threshold
   HR_DEBOUNCE_MS,
+  HR_PPR_BELT,          // appended: preserves all existing register addresses
   HR_COUNT              // <-- array size
 };
 

@@ -70,6 +70,13 @@ public:
   // ─── Ejector (non-blocking) ─────────────────────────────────────────────-
   void configureEjector(uint8_t inputChannel, uint8_t outputChannel,
                         uint32_t delayMs, uint32_t durationMs);
+  // Trigger after the motion input advances by targetPulses. A stopped motion
+  // input pauses the pending object instead of firing or discarding it.
+  void configureDistanceEjector(uint8_t inputChannel, uint8_t outputChannel,
+                                uint8_t motionChannel, uint32_t targetPulses,
+                                uint32_t durationMs);
+  // Update valve pulse width without changing time/distance tracking mode.
+  void setEjectorDuration(uint32_t durationMs);
   void enableEjector(bool enabled);
 
   // ─── CIP (non-blocking) ──────────────────────────────────────────────────
@@ -93,6 +100,7 @@ public:
   // Read-only process introspection (for telemetry / SCADA).
   uint8_t  ejectorState() const { return _ejector.state; }  // 0 idle,1 wait,2 fire
   uint32_t ejectorCount() const { return _ejector.count; }  // fires since boot
+  bool     ejectorEnabled() const { return _ejector.enabled; }
   uint8_t  cipState()     const { return _cip.state; }      // 0 idle,1 on,2 off
 
   HardwareSerial& rs485() { return Serial1; }
@@ -124,9 +132,10 @@ private:
 
   enum { EJ_IDLE = 0, EJ_WAIT, EJ_FIRE };
   struct Ejector {
-    bool     configured, enabled;
-    uint8_t  inputCh, outputCh;   // 1-indexed
+    bool     configured, enabled, distanceMode;
+    uint8_t  inputCh, outputCh, motionCh;   // 1-indexed
     uint32_t delayMs, durationMs;
+    uint32_t startPulse, targetPulses;
     uint8_t  state;
     uint32_t timer;
     bool     lastInput;
