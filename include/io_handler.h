@@ -47,28 +47,30 @@ void io_init() {
   _tca_write_output(0xFF);   // confirmer OFF
   g_io.do_state = 0x00;
 
-  // DIN en entrée
-  pinMode(DIN_BELLY_FIBER,  INPUT);
-  pinMode(DIN_FB_BLADE,     INPUT);
-  pinMode(DIN_FB_WHEEL1,    INPUT);
-  pinMode(DIN_FB_WHEEL2,    INPUT);
-  pinMode(DIN_MOTORS_TRIP,  INPUT);
-  pinMode(DIN_MOTORS_ON,    INPUT);
-  pinMode(DIN_FB_BELT,      INPUT);
-  pinMode(DIN_SPARE,        INPUT);
+  // DIN : INPUT_PULLUP — optos actifs-bas (24V = GPIO LOW)
+  // Le pullup interne maintient le pin à HIGH au repos → évite le flottement des pins adjacents
+  pinMode(DIN_BELLY_FIBER,  INPUT_PULLUP);
+  pinMode(DIN_FB_BLADE,     INPUT_PULLUP);
+  pinMode(DIN_FB_WHEEL1,    INPUT_PULLUP);
+  pinMode(DIN_FB_WHEEL2,    INPUT_PULLUP);
+  pinMode(DIN_MOTORS_TRIP,  INPUT_PULLUP);
+  pinMode(DIN_MOTORS_ON,    INPUT_PULLUP);
+  pinMode(DIN_FB_BELT,      INPUT_PULLUP);
+  pinMode(DIN_SPARE,        INPUT_PULLUP);
 
   Serial.println(F("[IO] Init OK"));
 }
 
+// Optocoupleurs actifs-bas : 24V sur l'entrée → GPIO LOW → logique applicative HIGH
 void io_read_inputs() {
   g_io.inputs_valid = true;
-  g_io.belly_fiber      = digitalRead(DIN_BELLY_FIBER);
-  g_io.fb_blade_pulse   = digitalRead(DIN_FB_BLADE);
-  g_io.fb_wheel1_pulse  = digitalRead(DIN_FB_WHEEL1);
-  g_io.fb_wheel2_pulse  = digitalRead(DIN_FB_WHEEL2);
-  g_io.motors_trip      = digitalRead(DIN_MOTORS_TRIP);
-  g_io.motors_on        = digitalRead(DIN_MOTORS_ON);
-  g_io.fb_belt          = digitalRead(DIN_FB_BELT);
+  g_io.belly_fiber      = !digitalRead(DIN_BELLY_FIBER);
+  g_io.fb_blade_pulse   = !digitalRead(DIN_FB_BLADE);
+  g_io.fb_wheel1_pulse  = !digitalRead(DIN_FB_WHEEL1);
+  g_io.fb_wheel2_pulse  = !digitalRead(DIN_FB_WHEEL2);
+  g_io.motors_trip      = !digitalRead(DIN_MOTORS_TRIP);
+  g_io.motors_on        = !digitalRead(DIN_MOTORS_ON);
+  g_io.fb_belt          = !digitalRead(DIN_FB_BELT);
 }
 
 void io_set_output(uint8_t bit, bool state) {

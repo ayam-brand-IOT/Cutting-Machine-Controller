@@ -101,14 +101,19 @@ ModbusMessage FC03_handler(ModbusMessage request) {
   request.get(4, count);
 
   if (addr + count > HR_COUNT) {
+    Serial.printf("[MODBUS] FC03 ERR addr=%u count=%u (hors limites)\n", addr, count);
     response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_ADDRESS);
     return response;
   }
 
+  Serial.printf("[MODBUS] FC03 READ_HR addr=%u count=%u →", addr, count);
   response.add(request.getServerID(), request.getFunctionCode(), (uint8_t)(count * 2));
   for (uint16_t i = 0; i < count; i++) {
-    response.add(_hr_get(addr + i));
+    uint16_t v = _hr_get(addr + i);
+    Serial.printf(" [%u]=%u", addr + i, v);
+    response.add(v);
   }
+  Serial.println();
   return response;
 }
 
@@ -120,14 +125,19 @@ ModbusMessage FC04_handler(ModbusMessage request) {
   request.get(4, count);
 
   if (addr + count > IR_COUNT) {
+    Serial.printf("[MODBUS] FC04 ERR addr=%u count=%u (hors limites)\n", addr, count);
     response.setError(request.getServerID(), request.getFunctionCode(), ILLEGAL_DATA_ADDRESS);
     return response;
   }
 
+  Serial.printf("[MODBUS] FC04 READ_IR addr=%u count=%u →", addr, count);
   response.add(request.getServerID(), request.getFunctionCode(), (uint8_t)(count * 2));
   for (uint16_t i = 0; i < count; i++) {
-    response.add(_ir_get(addr + i));
+    uint16_t v = _ir_get(addr + i);
+    Serial.printf(" [%u]=%u", addr + i, v);
+    response.add(v);
   }
+  Serial.println();
   return response;
 }
 
@@ -146,7 +156,12 @@ ModbusMessage FC06_handler(ModbusMessage request) {
   portENTER_CRITICAL(&_reg_mux);
   g_hr[addr] = value;
   _clamp_hr(addr);
+  uint16_t clamped = g_hr[addr];
   portEXIT_CRITICAL(&_reg_mux);
+
+  Serial.printf("[MODBUS] FC06 WRITE_HR addr=%u val=%u", addr, value);
+  if (clamped != value) Serial.printf(" (clampé → %u)", clamped);
+  Serial.println();
 
   // Echo réponse standard FC06
   return ECHO_RESPONSE;
@@ -166,14 +181,17 @@ ModbusMessage FC16_handler(ModbusMessage request) {
     return response;
   }
 
+  Serial.printf("[MODBUS] FC16 WRITE_HR addr=%u count=%u →", addr, count);
   portENTER_CRITICAL(&_reg_mux);
   for (uint16_t i = 0; i < count; i++) {
     uint16_t val;
     request.get(7 + i * 2, val);
     g_hr[addr + i] = val;
     _clamp_hr(addr + i);
+    Serial.printf(" [%u]=%u", addr + i, g_hr[addr + i]);
   }
   portEXIT_CRITICAL(&_reg_mux);
+  Serial.println();
 
   // Réponse standard FC16 : serverID + FC + start_addr + count
   response.add(request.getServerID(), request.getFunctionCode(), addr, count);

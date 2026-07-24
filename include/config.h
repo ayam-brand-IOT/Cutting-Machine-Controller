@@ -40,7 +40,7 @@
                                // Sinon indiquer le GPIO DE ici
 
 // ─── Modbus ───────────────────────────────────────────────────────────────────
-#define MODBUS_NODE_ID    1
+#define MODBUS_NODE_ID    3
 #define MODBUS_BAUD       9600
 #define MODBUS_CONFIG     SERIAL_8N1   // 8N1 = standard Modbus
 
@@ -115,7 +115,7 @@
 #define DEFAULT_EJECTOR_ENABLE          1
 #define DEFAULT_CIP_ON_MS             200
 #define DEFAULT_CIP_OFF_MS           8000
-#define DEFAULT_CIP_ENABLE              1
+#define DEFAULT_CIP_ENABLE              0
 #define DEFAULT_PPR                     1
 
 // Limites

@@ -89,5 +89,32 @@ void loop() {
   if (now - lastRpmCalc >= RPM_CALC_MS) {
     lastRpmCalc = now;
     rpm_calculate();
+
+    // ─── Serial status ────────────────────────────────────────────────────────
+    Serial.println(F("┌─────────────────── MACHINE STATUS ───────────────────────┐"));
+    Serial.printf( "│ RPM   Blade  = %-5u  Wheel1 = %-5u  Wheel2 = %-5u      │\n",
+                   rpm_get(0), rpm_get(1), rpm_get(2));
+    Serial.println(F("├───────────────────────────────────────────────────────────┤"));
+    Serial.printf( "│ DIN1  BellyFiber  (GPIO4 ) = %s\n",  g_io.belly_fiber     ? "1  [ACTIVE]  │" : "0  [off]     │");
+    Serial.printf( "│ DIN2  FB_Blade    (GPIO5 ) = %s\n",  g_io.fb_blade_pulse  ? "1  [ACTIVE]  │" : "0  [off]     │");
+    Serial.printf( "│ DIN3  FB_Wheel1   (GPIO6 ) = %s\n",  g_io.fb_wheel1_pulse ? "1  [ACTIVE]  │" : "0  [off]     │");
+    Serial.printf( "│ DIN4  FB_Wheel2   (GPIO7 ) = %s\n",  g_io.fb_wheel2_pulse ? "1  [ACTIVE]  │" : "0  [off]     │");
+    Serial.printf( "│ DIN5  MotorsTrip  (GPIO8 ) = %s\n",  g_io.motors_trip     ? "1  [TRIP!]   │" : "0  [ok]      │");
+    Serial.printf( "│ DIN6  MotorsON    (GPIO9 ) = %s\n",  g_io.motors_on       ? "1  [RUNNING] │" : "0  [stopped] │");
+    Serial.printf( "│ DIN7  FB_Belt     (GPIO10) = %s\n",  g_io.fb_belt         ? "1  [ACTIVE]  │" : "0  [off]     │");
+    Serial.println(F("├───────────────────────────────────────────────────────────┤"));
+    Serial.printf( "│ DO1   Ejector  = %s\n", io_get_output(DO_EJECTOR) ? "1  [ON]      │" : "0  [off]     │");
+    Serial.printf( "│ DO2   CIP      = %s\n", io_get_output(DO_CIP)     ? "1  [ON]      │" : "0  [off]     │");
+    Serial.println(F("├───────────────────────────────────────────────────────────┤"));
+    Serial.println(F("│ MODBUS HR (holding registers)                             │"));
+    Serial.printf( "│  EjectorDelay   = %-5u ms                                │\n", hr_get(HR_EJECTOR_DELAY));
+    Serial.printf( "│  EjectorDuration= %-5u ms                                │\n", hr_get(HR_EJECTOR_DURATION));
+    Serial.printf( "│  EjectorEnable  = %s\n", hr_get(HR_EJECTOR_ENABLE) ? "1  [ON]      │" : "0  [off]     │");
+    Serial.printf( "│  CIP_ON_Time    = %-5u ms                                │\n", hr_get(HR_CIP_ON_TIME));
+    Serial.printf( "│  CIP_OFF_Time   = %-5u ms                                │\n", hr_get(HR_CIP_OFF_TIME));
+    Serial.printf( "│  CIP_Enable     = %s\n", hr_get(HR_CIP_ENABLE)     ? "1  [ON]      │" : "0  [off]     │");
+    Serial.printf( "│  PPR Blade=%-3u  Wheel1=%-3u  Wheel2=%-3u                  │\n",
+                   hr_get(HR_RPM_PPR_BLADE), hr_get(HR_RPM_PPR_WHEEL1), hr_get(HR_RPM_PPR_WHEEL2));
+    Serial.println(F("└───────────────────────────────────────────────────────────┘"));
   }
 }
