@@ -31,7 +31,7 @@ static uint16_t selFromBaud(uint32_t baud) {
 
 /* ─── Construction ───────────────────────────────────────────────────────── */
 Waveshare8DI8DO::Waveshare8DI8DO()
-  : _expAddr(W8DI8DO_EXP_ADDR), _activeHigh(true),
+  : _expAddr(W8DI8DO_EXP_ADDR), _activeHigh(true), _inActiveHigh(false),
     _i2cStarted(false), _outputsReady(false), _inputsReady(false),
     _rs485Started(false), _rtcPresent(false),
     _risingLatch(0), _fallingLatch(0), _freqWindowMs(250),
@@ -86,9 +86,15 @@ bool Waveshare8DI8DO::beginInputs() {
   gpio_config_t io = {};
   io.pin_bit_mask = mask;
   io.mode         = GPIO_MODE_INPUT;
-  io.pull_up_en   = GPIO_PULLUP_DISABLE;    // 24 V opto drives the level
+  // INPUT_PULLUP on all 8 DI: the internal ~45k pull-up defines the idle level
+  // as HIGH, so an open/disconnected input reads a stable inactive state instead
+  // of floating. The opto pulls the line LOW when its 24 V side is energized,
+  // i.e. the inputs are active-low; _serviceInputs() normalizes that away.
+  io.pull_up_en   = GPIO_PULLUP_ENABLE;
   io.pull_down_en = GPIO_PULLDOWN_DISABLE;
-  io.intr_type    = GPIO_INTR_POSEDGE;      // rising edge feeds the pulse ISR
+  // Count the ACTIVATING edge, so a pulse is counted when the opto conducts.
+  // (Either edge yields one count per cycle, so RPM is unaffected either way.)
+  io.intr_type    = _inActiveHigh ? GPIO_INTR_POSEDGE : GPIO_INTR_NEGEDGE;
   gpio_config(&io);
 
   // Install the shared ISR service (harmless if Arduino already installed it).
@@ -101,7 +107,9 @@ bool Waveshare8DI8DO::beginInputs() {
 
   uint32_t now = millis();
   for (uint8_t i = 0; i < W8DI8DO_NUM_DI; i++) {
+    // Seed with the LOGICAL state so nothing reports a phantom edge at boot.
     bool lvl = gpio_get_level((gpio_num_t)s_diGpio[i]);
+    if (!_inActiveHigh) lvl = !lvl;
     _in[i].rawLast = lvl; _in[i].debounced = lvl;
     _in[i].lastChangeMs = now; _in[i].lastFreqMs = now;
     _in[i].lastCount = s_pulse[i]; _in[i].frequencyHz = 0.0f;
@@ -333,6 +341,28 @@ void Waveshare8DI8DO::setOutputPolarity(bool activeHigh) {
   _exp.setPolarity(activeHigh);
 }
 
+void Waveshare8DI8DO::setInputPolarity(bool activeHigh) {
+  if (activeHigh == _inActiveHigh) return;
+  _inActiveHigh = activeHigh;
+  if (!_inputsReady) return;   // beginInputs() will pick it up
+
+  // Re-arm the pulse ISR on the other edge, then re-seed the debounce state from
+  // the live pins so flipping polarity never fabricates an edge.
+  gpio_int_type_t t = _inActiveHigh ? GPIO_INTR_POSEDGE : GPIO_INTR_NEGEDGE;
+  uint32_t now = millis();
+  for (uint8_t i = 0; i < W8DI8DO_NUM_DI; i++) {
+    gpio_set_intr_type((gpio_num_t)s_diGpio[i], t);
+    bool lvl = gpio_get_level((gpio_num_t)s_diGpio[i]);
+    if (!_inActiveHigh) lvl = !lvl;
+    _in[i].rawLast = lvl;
+    _in[i].debounced = lvl;
+    _in[i].lastChangeMs = now;
+  }
+  _risingLatch = 0;
+  _fallingLatch = 0;
+  _ejector.lastInput = _in[_ejector.inputCh ? _ejector.inputCh - 1 : 0].debounced;
+}
+
 /* ─── Service loop ───────────────────────────────────────────────────────── */
 void Waveshare8DI8DO::update() {
   uint32_t now = millis();
@@ -346,7 +376,11 @@ void Waveshare8DI8DO::update() {
 
 void Waveshare8DI8DO::_serviceInputs(uint32_t now) {
   for (uint8_t i = 0; i < W8DI8DO_NUM_DI; i++) {
+    // THE polarity normalization point. Everything below — debounce, edge
+    // latches, readInput(), readInputsMask(), the ejector and CIP state
+    // machines, the Modbus tables — works in LOGICAL terms: true = ACTIVE.
     bool raw = gpio_get_level((gpio_num_t)s_diGpio[i]);
+    if (!_inActiveHigh) raw = !raw;
 
     // Debounce: restart the timer on any raw change; commit once stable.
     if (raw != _in[i].rawLast) {
@@ -401,7 +435,8 @@ void Waveshare8DI8DO::_serviceEjector(uint32_t now) {
 
   switch (_ejector.state) {
     case EJ_IDLE:
-      if (!cur && _ejector.lastInput) {              // falling edge: belly fiber detects (active-low input)
+      if (cur && !_ejector.lastInput) {              // input went ACTIVE: belly fiber detected
+                                                     // (polarity already normalized in _serviceInputs)
         if (_ejector.delayMs == 0) {
           _rawSet(_ejector.outputCh - 1, true);
           _ejector.timer = now;

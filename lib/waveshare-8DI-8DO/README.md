@@ -98,6 +98,29 @@ void loop() {
 timers, the ejector and CIP state machines, and applies any queued Modbus
 writes. Never block in `loop()`.
 
+**Input pull configuration:** `beginInputs()` configures all 8 DI as
+**`INPUT_PULLUP`** (internal ~45 kΩ pull-up, pull-down disabled). The idle level
+is therefore **HIGH**, and an open or disconnected terminal reads a stable
+inactive state instead of floating. The optocoupler pulls the line **LOW** when
+its 24 V side is energized — so the inputs are **active-low** on this board.
+
+**Input polarity is normalized, so the API is logical.** That inversion is
+applied once, at the top of `_serviceInputs()`. Everything above it —
+`readInput()`, `readInputsMask()`, `risingEdge()`/`fallingEdge()`, the ejector
+and CIP state machines, and the Modbus discrete-input table — speaks in
+**logical** terms: `true` / `1` means **ACTIVE**, never "electrically high".
+So `risingEdge(ch)` fires when the input *becomes active*, and you never write
+`!` to compensate for the opto.
+
+```cpp
+io.setInputPolarity(false);   // default: LOW = active (this board)
+io.setInputPolarity(true);    // HIGH = active, if your front-end doesn't invert
+```
+
+Safe to call after `begin()`: it re-arms the pulse ISR on the other edge and
+re-seeds the debounce state from the live pins, so flipping polarity never
+fabricates a phantom edge.
+
 ---
 
 ## Safe boot — how it works
@@ -164,8 +187,10 @@ io.setOutputPolarity(false);   // active-low
 
 ## Ejector
 
-Non-blocking: on a rising edge of the input, wait `delay`, fire the output for
-`duration`, release.
+Non-blocking: when the input **becomes active**, wait `delay`, fire the output
+for `duration`, release. "Active" is polarity-normalized (see BasicIO above), so
+on this board that is electrically a falling edge — but the state machine, like
+the rest of the API, is written in logical terms.
 
 ```cpp
 io.configureEjector(/*in=*/1, /*out=*/1, /*delayMs=*/200, /*durationMs=*/500);

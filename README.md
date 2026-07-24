@@ -39,7 +39,7 @@ small state machines serviced by `update()`.
 
 | Function | Type | Detail |
 |---|---|---|
-| Belly fiber → ejector | **control** | Rising edge on DI1 → wait `delay` ms → fire DO1 for `duration` ms |
+| Belly fiber → ejector | **control** | DI1 becomes active → wait `delay` ms → fire DO1 for `duration` ms |
 | CIP valve | **control** | DO2 cycles ON `cipOn` ms / OFF `cipOff` ms, continuously |
 | Blade / wheel RPM | telemetry | Hardware pulse counting on DI2/DI3/DI4 → RPM |
 | Motors trip / on | telemetry | DI5 / DI6 (read-only) |
@@ -71,6 +71,20 @@ The 8 inputs are 24 V opto-isolated. The 8 outputs are opto-isolated Darlington
 sink drivers behind an I2C expander — see the driver library README for the
 electrical details and the safe-boot guarantee (**all outputs start OFF**).
 
+**Input polarity.** On this board the optocoupler sinks the ESP32 pin to GND when
+its 24 V side is energized, and the pin is configured `INPUT_PULLUP`, so the
+inputs are electrically **active-low** and never float. The driver normalizes
+that inversion once (`setInputPolarity(false)`, the default), so everything above
+it — `readInput()`, the DI mask, the discrete inputs the SCADA reads, and the
+alarm conditions in `main.cpp` — is **logical**: `1` means the signal is
+**active** (belly detected, motors tripped, belt running), never "24 V present".
+
+> **Verify at commissioning:** this assumes every DI asserts 24 V when its
+> condition is *true*. If a signal is wired from a **normally-closed** contact —
+> common for trip/fault loops, where a broken wire must read as a fault — then
+> 24 V means *healthy* and that channel reads inverted. Check `MOTOR_TRIP` (DI5)
+> and `BELT` (DI7) against the real panel before trusting their alarms.
+
 ---
 
 ## Repository structure
@@ -82,12 +96,11 @@ Cutting-Machine-Controller/
 │   ├── config.h                #   all tunable parameters + Modbus map
 │   ├── MachineTypes.h          #   ControlParams + Telemetry data structs
 │   └── main.cpp                #   glue: boot, control loop, telemetry
-├── lib/
-│   ├── waveshare-8DI-8DO/      # board driver (safe boot, IO, RPM, ejector, CIP)
-│   ├── IndustrialCore/         # REUSABLE, hardware-agnostic building blocks
-│   │   └── src/ Scheduler.h  AlarmManager  ConsoleReporter  ModbusBank
-│   └── eModbus/                # vendored RTU-only subset of miq19/eModbus
-└── include/                    # (legacy headers from the pre-library firmware)
+└── lib/
+    ├── waveshare-8DI-8DO/      # board driver (safe boot, IO, RPM, ejector, CIP)
+    ├── IndustrialCore/         # REUSABLE, hardware-agnostic building blocks
+    │   └── src/ Scheduler.h  AlarmManager  ConsoleReporter  ModbusBank
+    └── eModbus/                # vendored RTU-only subset of miq19/eModbus
 ```
 
 The design is split into two layers so the reusable parts can serve future
@@ -99,9 +112,6 @@ machines untouched:
 - **`src/`** — this machine: the channel map, the process logic, the exact
   Modbus register layout, all driven from `config.h`.
 
-> **Note:** `include/` holds the original hand-written firmware headers. They are
-> superseded by the libraries and are no longer compiled. They can be deleted.
-
 ---
 
 ## How it works
@@ -111,14 +121,22 @@ machines untouched:
 2. `ControlParams::loadDefaults()` seeds the runtime set-points from `config.h`.
 3. `io.begin()` — I2C up, **every output forced OFF**, inputs configured.
 4. `applyControlToIO()` pushes the set-points into the driver (ejector, CIP, debounce).
-5. RS485 up; the Modbus register banks are seeded; the Modbus RTU slave starts on
+5. Ejector and CIP are then forced **disabled** — the boot output lockout (see below).
+6. RS485 up; the Modbus register banks are seeded; the Modbus RTU slave starts on
    FreeRTOS core 1.
-6. `AlarmManager` initialized.
+7. `AlarmManager` initialized.
+
+**Boot output lockout:** for the first `BOOT_OUTPUT_LOCKOUT_MS` (10 s) every
+actuated output stays OFF, so nothing fires while the machine and sensors are
+still settling. `loop()` applies the real `ejectEnabled` / `cipEnabled` states
+once the window elapses. A SCADA write to the enable coils during the lockout is
+recorded but not acted on until then.
 
 **Control loop (`loop()`), never blocks:**
 ```
 io.update();      // debounce inputs, run ejector/CIP/output timers (driver)
 modbus.pump();    // apply queued SCADA writes (single-writer, in this task)
+// once, at BOOT_OUTPUT_LOCKOUT_MS: unlock the outputs
 if (telemetrySched.ready(now)) refreshTelemetry();  // 10 Hz
 if (consoleSched.ready(now))   printStatus();       // 1 Hz
 ```
@@ -147,16 +165,19 @@ Everything a commissioning engineer changes lives in `src/config.h` (namespace
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `EJECT_DELAY_MS` | 200 | Belly detection → ejector fire delay |
-| `EJECT_DURATION_MS` | 500 | Ejector pulse width |
-| `EJECT_ENABLED_BOOT` | true | Ejector enabled at power-up |
+| `EJECT_DELAY_MS` | 1 | Belly detection → ejector fire delay |
+| `EJECT_DURATION_MS` | 5 | Ejector pulse width |
+| `EJECT_ENABLED_BOOT` | true | Ejector enabled at power-up (after the boot lockout) |
 | `CIP_ON_MS` / `CIP_OFF_MS` | 2000 / 8000 | CIP valve ON / OFF times |
-| `CIP_ENABLED_BOOT` | true | CIP enabled at power-up |
+| `CIP_ENABLED_BOOT` | false | CIP enabled at power-up (after the boot lockout) |
 | `PPR_BLADE/WHEEL1/WHEEL2` | 1 | Pulses per revolution (RPM scaling) |
 | `BLADE_RPM_MIN` | 100 | Alarm if blade RPM below this while motors ON |
-| `DEBOUNCE_MS` | 5 | Input debounce (pulse counting is ISR-based, unaffected) |
+| `DEBOUNCE_MS` | 1 | Input debounce (pulse counting is ISR-based, unaffected) |
+| `BOOT_OUTPUT_LOCKOUT_MS` | 10000 | Every actuated output is held OFF this long after boot |
 | `MB_SLAVE_ID` | 1 | Modbus unit id |
 | `MB_BAUD` / `MB_CONFIG` | 19200 / 8E1 | RS485 line settings |
+| `MB_CORE` | 1 | FreeRTOS core running the eModbus task |
+| `SERIAL_BAUD` | 115200 | USB console baud |
 | `TELEMETRY_MS` | 100 | Telemetry + alarm refresh period (10 Hz) |
 | `CONSOLE_MS` | 1000 | Serial status-table period (1 Hz) |
 | `CONSOLE_ANSI` | true | Colored console (set false for plain terminals) |

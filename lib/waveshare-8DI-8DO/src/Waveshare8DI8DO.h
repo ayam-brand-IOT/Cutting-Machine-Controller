@@ -10,6 +10,10 @@
  *     small state machines serviced by update(), which you call every loop().
  *   - Direct ESP32 pins (the 8 inputs, RS485 DE, etc.) use the ESP-IDF gpio
  *     driver, not Arduino pinMode()/digitalRead().
+ *   - The 8 inputs are configured INPUT_PULLUP: idle reads HIGH, the opto pulls
+ *     LOW when energized, so the DI are active-low on this board. Polarity is
+ *     normalized once, at the read, so the whole API above it is LOGICAL:
+ *     readInput()/readInputsMask()/risingEdge() mean "active", never "high".
  *   - The 8 outputs live behind an I2C expander and are controlled through a
  *     mutex-guarded shadow register that is forced OFF before anything else.
  *   - Channels are 1-indexed (1..8) to match the DI1..DO8 silkscreen.
@@ -46,11 +50,11 @@ public:
   bool beginModbusSlave(uint8_t slaveId = 1, uint32_t baudrate = 9600,
                         uint32_t config = SERIAL_8N1, int coreId = 1);
 
-  // ─── Inputs ──────────────────────────────────────────────────────────────
-  bool     readInput(uint8_t channel);        // debounced level
+  // ─── Inputs (LOGICAL: true/1 = ACTIVE, see setInputPolarity) ─────────────
+  bool     readInput(uint8_t channel);        // debounced active state
   uint8_t  readInputsMask();                   // bit0 = DI1 ... bit7 = DI8
-  bool     risingEdge(uint8_t channel);        // latched, cleared on read
-  bool     fallingEdge(uint8_t channel);       // latched, cleared on read
+  bool     risingEdge(uint8_t channel);        // became ACTIVE; latched, cleared on read
+  bool     fallingEdge(uint8_t channel);       // became INACTIVE; latched, cleared on read
   uint32_t getPulseCount(uint8_t channel);
   void     resetPulseCount(uint8_t channel);
   float    getFrequencyHz(uint8_t channel);
@@ -79,6 +83,11 @@ public:
   // ─── Config ──────────────────────────────────────────────────────────────
   void setInputDebounce(uint8_t channel, uint32_t debounceMs);  // channel 0 = all
   void setOutputPolarity(bool activeHigh);
+
+  // Electrical sense of the 8 DI. This board's 24 V optocouplers sink the pin to
+  // GND when energized and the internal pull-up holds it HIGH at rest, so the
+  // default is activeHigh=false (LOW = active). Safe to call after begin().
+  void setInputPolarity(bool activeHigh);
   void setExpanderAddress(uint8_t addr) { _expAddr = addr; }
 
   // ─── Service ─────────────────────────────────────────────────────────────
@@ -160,7 +169,8 @@ private:
   W8DI8DO_Modbus   _modbus;
 
   uint8_t     _expAddr;
-  bool        _activeHigh;
+  bool        _activeHigh;      // OUTPUT polarity (see setOutputPolarity)
+  bool        _inActiveHigh;    // INPUT  polarity (see setInputPolarity)
   bool        _i2cStarted;
   bool        _outputsReady;
   bool        _inputsReady;
