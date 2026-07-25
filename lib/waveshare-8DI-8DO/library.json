@@ -17,9 +17,15 @@
   "frameworks": "arduino",
   "platforms": "espressif32",
   "headers": "Waveshare8DI8DO.h",
-  "dependencies": {
-    "miq19/eModbus": "^1.7.4"
-  },
+  "_comment_dependencies": [
+    "NO registry dependency on miq19/eModbus on purpose. This project vendors an",
+    "RTU-only subset at lib/eModbus (see lib/eModbus/README.md). Declaring the",
+    "registry package here made PlatformIO download it into .pio/libdeps on every",
+    "dependency resolution — dragging in Ethernet + AsyncTCP + ESPAsyncTCP, the",
+    "exact transitive deps the vendoring exists to avoid — and then not even use",
+    "it, because lib/ takes precedence over libdeps/. If you unvendor eModbus,",
+    "add it to lib_deps in platformio.ini instead."
+  ],
   "build": {
     "srcFilter": "+<*>"
   }
