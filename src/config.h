@@ -28,13 +28,14 @@ constexpr uint8_t CH_BELLY   = 1;   // DI1  belly orientation fiber -> ejector t
 constexpr uint8_t CH_BLADE   = 2;   // DI2  cutting blade RPM feedback
 constexpr uint8_t CH_WHEEL1  = 3;   // DI3  wheel 1 RPM feedback
 constexpr uint8_t CH_WHEEL2  = 4;   // DI4  wheel 2 RPM feedback
-constexpr uint8_t CH_TRIP    = 5;   // DI5  motors trip  (telemetry only)
-constexpr uint8_t CH_MOTORON = 6;   // DI6  motors ON    (telemetry only)
-constexpr uint8_t CH_BELT    = 7;   // DI7  belt running (telemetry only)
-// DI8 spare.
+constexpr uint8_t CH_BELT_RPM = 5;   // DI5  belt encoder pulse -> RPM feedback
+constexpr uint8_t CH_TRIP    = 6;   // DI6  motors trip  (telemetry only)
+constexpr uint8_t CH_MOTORON = 7;   // DI7  motors ON    (telemetry only)
+constexpr uint8_t CH_BELT        = 8;   // DI8  belt running (telemetry only)
 // Outputs — the only two things this controller actuates.
-constexpr uint8_t CH_EJECTOR = 1;   // DO1  ejector solenoid
-constexpr uint8_t CH_CIP     = 2;   // DO2  CIP cleaning valve
+constexpr uint8_t CH_EJECTOR     = 1;   // DO1  ejector solenoid
+constexpr uint8_t CH_CIP         = 2;   // DO2  CIP cleaning valve
+constexpr uint8_t CH_BELT_RPM_OUT = 3;  // DO3  belt RPM frequency pass-through
 
 // ─── Ejector (belly-triggered pulse) ────────────────────────────────────────
 constexpr uint32_t EJECT_DELAY_MS     = 1;    // detection -> fire delay
@@ -52,7 +53,9 @@ constexpr bool     CIP_ENABLED_BOOT = false;
 constexpr uint16_t PPR_BLADE     = 1;    // pulses per revolution
 constexpr uint16_t PPR_WHEEL1    = 1;
 constexpr uint16_t PPR_WHEEL2    = 1;
+constexpr uint16_t PPR_BELT      = 1;
 constexpr uint16_t BLADE_RPM_MIN = 100;  // alarm below this while motors are ON
+constexpr uint32_t BELT_RPM_OUT_PULSE_MS = 5;  // output pulse width for belt RPM pass-through
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
 constexpr uint32_t DEBOUNCE_MS = 1;      // applies to all DI (pulse count is ISR-based)
@@ -105,6 +108,7 @@ enum : uint16_t {
   IR_UPTIME_LO,       // seconds (low word)
   IR_UPTIME_HI,       // (high word)
   IR_FW_VERSION,      // 0xMMmm
+  IR_RPM_BELT,        // rev/min  (DI8 encoder)
   IR_COUNT            // <-- array size
 };
 
@@ -119,6 +123,7 @@ enum : uint16_t {
   HR_PPR_WHEEL2,
   HR_BLADE_RPM_MIN,     // alarm threshold
   HR_DEBOUNCE_MS,
+  HR_PPR_BELT,
   HR_COUNT              // <-- array size
 };
 
