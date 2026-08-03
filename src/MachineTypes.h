@@ -45,6 +45,7 @@ struct ControlParams {
   uint16_t pprBlade;
   uint16_t pprWheel1;
   uint16_t pprWheel2;
+  uint16_t pprBelt;
   uint16_t bladeRpmMin;
   uint32_t debounceMs;
   bool     ejectEnabled;
@@ -59,6 +60,7 @@ struct ControlParams {
     pprBlade        = cfg::PPR_BLADE;
     pprWheel1       = cfg::PPR_WHEEL1;
     pprWheel2       = cfg::PPR_WHEEL2;
+    pprBelt         = cfg::PPR_BELT;
     bladeRpmMin     = cfg::BLADE_RPM_MIN;
     debounceMs      = cfg::DEBOUNCE_MS;
     ejectEnabled    = cfg::EJECT_ENABLED_BOOT;
@@ -71,6 +73,7 @@ struct Telemetry {
   uint16_t rpmBlade;
   uint16_t rpmWheel1;
   uint16_t rpmWheel2;
+  uint16_t rpmBelt;
   uint8_t  inputsMask;
   uint8_t  outputsMask;
   bool     motorTrip;

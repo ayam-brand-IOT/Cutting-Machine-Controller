@@ -71,6 +71,7 @@ static void seedModbusTables() {
   mbHolding[cfg::HR_PPR_BLADE]      = ctrl.pprBlade;
   mbHolding[cfg::HR_PPR_WHEEL1]     = ctrl.pprWheel1;
   mbHolding[cfg::HR_PPR_WHEEL2]     = ctrl.pprWheel2;
+  mbHolding[cfg::HR_PPR_BELT]       = ctrl.pprBelt;
   mbHolding[cfg::HR_BLADE_RPM_MIN]  = ctrl.bladeRpmMin;
   mbHolding[cfg::HR_DEBOUNCE_MS]    = (uint16_t)ctrl.debounceMs;
   mbCoils[cfg::CO_EJECT_ENABLE]     = ctrl.ejectEnabled ? 1 : 0;
@@ -91,6 +92,7 @@ static void onModbusWrite(uint8_t kind, uint16_t index, uint16_t value) {
       case cfg::HR_PPR_BLADE:      ctrl.pprBlade  = value ? value : 1; break;
       case cfg::HR_PPR_WHEEL1:     ctrl.pprWheel1 = value ? value : 1; break;
       case cfg::HR_PPR_WHEEL2:     ctrl.pprWheel2 = value ? value : 1; break;
+      case cfg::HR_PPR_BELT:       ctrl.pprBelt   = value ? value : 1; break;
       case cfg::HR_BLADE_RPM_MIN:  ctrl.bladeRpmMin = value; break;
       case cfg::HR_DEBOUNCE_MS:    ctrl.debounceMs = value; io.setInputDebounce(0, value); break;
       default: break;
@@ -113,9 +115,10 @@ static void onModbusWrite(uint8_t kind, uint16_t index, uint16_t value) {
 
 // Rebuild the machine snapshot, evaluate alarms, mirror into the Modbus tables.
 static void refreshTelemetry() {
-  tlm.rpmBlade  = (uint16_t)(io.getRPM(cfg::CH_BLADE,  ctrl.pprBlade)  + 0.5f);
-  tlm.rpmWheel1 = (uint16_t)(io.getRPM(cfg::CH_WHEEL1, ctrl.pprWheel1) + 0.5f);
-  tlm.rpmWheel2 = (uint16_t)(io.getRPM(cfg::CH_WHEEL2, ctrl.pprWheel2) + 0.5f);
+  tlm.rpmBlade  = (uint16_t)(io.getRPM(cfg::CH_BLADE,     ctrl.pprBlade)  + 0.5f);
+  tlm.rpmWheel1 = (uint16_t)(io.getRPM(cfg::CH_WHEEL1,    ctrl.pprWheel1) + 0.5f);
+  tlm.rpmWheel2 = (uint16_t)(io.getRPM(cfg::CH_WHEEL2,    ctrl.pprWheel2) + 0.5f);
+  tlm.rpmBelt   = (uint16_t)(io.getRPM(cfg::CH_BELT_RPM,  ctrl.pprBelt)   + 0.5f);
   tlm.inputsMask  = io.readInputsMask();
   tlm.outputsMask = io.getOutputsMask();
   tlm.motorTrip = io.readInput(cfg::CH_TRIP);
@@ -156,6 +159,7 @@ static void refreshTelemetry() {
   mbInput[cfg::IR_UPTIME_LO]     = (uint16_t)(tlm.uptimeS & 0xFFFF);
   mbInput[cfg::IR_UPTIME_HI]     = (uint16_t)((tlm.uptimeS >> 16) & 0xFFFF);
   mbInput[cfg::IR_FW_VERSION]    = cfg::FW_VERSION;
+  mbInput[cfg::IR_RPM_BELT]      = tlm.rpmBelt;
 
   for (uint8_t i = 0; i < cfg::DI_COUNT; i++)
     mbDiscrete[i] = (tlm.inputsMask >> i) & 0x01;
@@ -166,6 +170,7 @@ static void printStatus() {
   console.row("System",          "%s", systemStateName(tlm.systemState));
   console.row("Uptime",          "%lu s", (unsigned long)tlm.uptimeS);
   console.row("RPM blade/w1/w2", "%u / %u / %u", tlm.rpmBlade, tlm.rpmWheel1, tlm.rpmWheel2);
+  console.row("RPM belt",        "%u", tlm.rpmBelt);
   console.row("Ejector",         "%s  fires=%lu  (DO%u %s)",
               ejectorStateName(tlm.ejectorState), (unsigned long)tlm.ejectorCount,
               cfg::CH_EJECTOR, ctrl.ejectEnabled ? "enabled" : "disabled");
@@ -262,4 +267,8 @@ void loop() {
 
   if (telemetrySched.ready(now)) refreshTelemetry();
   if (consoleSched.ready(now))   printStatus();
+
+  // Belt RPM pass-through: every encoder pulse on DI8 generates a pulse on DO3.
+  if (io.risingEdge(cfg::CH_BELT_RPM))
+    io.pulseOutput(cfg::CH_BELT_RPM_OUT, cfg::BELT_RPM_OUT_PULSE_MS);
 }
